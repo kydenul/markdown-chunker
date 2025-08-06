@@ -166,7 +166,7 @@ func (c *MarkdownChunker) processCodeBlock(code ast.Node, id int) *Chunk {
 	// 获取代码语言
 	if fenced, ok := code.(*ast.FencedCodeBlock); ok {
 		if fenced.Info != nil {
-			language = strings.TrimSpace(string(fenced.Info.Text(c.source)))
+			language = strings.TrimSpace(string(fenced.Info.Segment.Value(c.source)))
 		}
 	}
 
@@ -212,8 +212,8 @@ func (c *MarkdownChunker) processTable(table *extast.Table, id int) *Chunk {
 		}
 	}
 
-	// 对于markdown表格，需要正确计算行数
-	// goldmark会将分隔行也作为一个TableRow，但我们不应该计算它
+	// goldmark 解析表格时，会将表头和数据行都作为 TableRow
+	// 但是在原始 markdown 中，我们需要计算实际的行数（包括表头）
 	// 通过分析原始内容来确定实际行数
 	if content != "" {
 		lines := strings.Split(strings.TrimSpace(content), "\n")
@@ -338,7 +338,7 @@ func (c *MarkdownChunker) getNodeRawContent(node ast.Node) string {
 		// 添加开始的围栏
 		buf.WriteString("```")
 		if n.Info != nil {
-			buf.Write(n.Info.Text(c.source))
+			buf.Write(n.Info.Segment.Value(c.source))
 		}
 		buf.WriteByte('\n')
 
@@ -469,11 +469,47 @@ func (c *MarkdownChunker) reconstructBlockquote(quote *ast.Blockquote) string {
 
 // reconstructTable 重构表格的原始markdown
 func (c *MarkdownChunker) reconstructTable(table *extast.Table) string {
-	// 对于表格，我们需要从原始源码中提取完整的表格内容
-	// 因为goldmark的表格AST结构比较复杂，直接从源码重构更可靠
+	var buf bytes.Buffer
+	isFirstRow := true
 
-	// 找到表格在源码中的位置
-	// 这是一个简化的方法，假设表格是连续的行
+	// 遍历表格的所有行
+	for child := table.FirstChild(); child != nil; child = child.NextSibling() {
+		if tableRow, ok := child.(*extast.TableRow); ok {
+			buf.WriteString("|")
+
+			// 遍历行中的所有单元格
+			for cell := tableRow.FirstChild(); cell != nil; cell = cell.NextSibling() {
+				if tableCell, ok := cell.(*extast.TableCell); ok {
+					buf.WriteString(" ")
+					cellText := c.getNodeText(tableCell)
+					buf.WriteString(cellText)
+					buf.WriteString(" |")
+				}
+			}
+
+			// 如果不是最后一行，添加换行
+			if child.NextSibling() != nil {
+				buf.WriteByte('\n')
+
+				// 如果这是第一行（表头），添加分隔行
+				if isFirstRow {
+					buf.WriteString("|")
+					for cell := tableRow.FirstChild(); cell != nil; cell = cell.NextSibling() {
+						if _, ok := cell.(*extast.TableCell); ok {
+							buf.WriteString("------|")
+						}
+					}
+					if child.NextSibling() != nil {
+						buf.WriteByte('\n')
+					}
+					isFirstRow = false
+				}
+			}
+		}
+	}
+
+	// 总是从原始源码中提取表格内容，因为AST重构可能不完整
+	// 从原始源码中提取表格内容
 	lines := strings.Split(string(c.source), "\n")
 	var tableLines []string
 	inTable := false
@@ -489,7 +525,14 @@ func (c *MarkdownChunker) reconstructTable(table *extast.Table) string {
 		}
 	}
 
-	return strings.Join(tableLines, "\n")
+	if len(tableLines) > 0 {
+		return strings.Join(tableLines, "\n")
+	}
+
+	// 如果从源码提取失败，使用AST重构的结果
+	result := buf.String()
+
+	return result
 }
 
 // getNodeText 获取节点的纯文本内容
