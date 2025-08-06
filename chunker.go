@@ -1,0 +1,554 @@
+package markdownchunker
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	extast "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/renderer/html"
+	"github.com/yuin/goldmark/text"
+)
+
+// Chunk 表示分块后的内容
+type Chunk struct {
+	ID       int               `json:"id"`
+	Type     string            `json:"type"`    // heading, paragraph, table, code, list
+	Content  string            `json:"content"` // 原始 markdown 内容
+	Text     string            `json:"text"`    // 纯文本内容，用于向量化
+	Level    int               `json:"level"`   // 标题层级 (仅对 heading 有效)
+	Metadata map[string]string `json:"metadata"`
+}
+
+// MarkdownChunker Markdown 分块器
+type MarkdownChunker struct {
+	md     goldmark.Markdown
+	chunks []Chunk
+	source []byte
+}
+
+// NewMarkdownChunker 创建新的分块器
+func NewMarkdownChunker() *MarkdownChunker {
+	md := goldmark.New(
+		goldmark.WithExtensions(
+			extension.GFM, // GitHub Flavored Markdown (包含表格支持)
+		),
+		goldmark.WithParserOptions(
+			parser.WithAutoHeadingID(),
+		),
+		goldmark.WithRendererOptions(
+			html.WithHardWraps(),
+			html.WithXHTML(),
+		),
+	)
+
+	return &MarkdownChunker{
+		md:     md,
+		chunks: []Chunk{},
+	}
+}
+
+// ChunkDocument 对整个文档进行分块
+func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
+	c.source = content
+	c.chunks = []Chunk{}
+
+	// 解析 Markdown
+	reader := text.NewReader(content)
+	doc := c.md.Parser().Parse(reader)
+
+	// 遍历顶层节点进行分块
+	chunkID := 0
+	for child := doc.FirstChild(); child != nil; child = child.NextSibling() {
+		chunk := c.processNode(child, chunkID)
+		if chunk != nil {
+			c.chunks = append(c.chunks, *chunk)
+			chunkID++
+		}
+	}
+
+	return c.chunks, nil
+}
+
+// processNode 处理单个 AST 节点
+func (c *MarkdownChunker) processNode(node ast.Node, id int) *Chunk {
+	switch n := node.(type) {
+	case *ast.Heading:
+		return c.processHeading(n, id)
+	case *ast.Paragraph:
+		return c.processParagraph(n, id)
+	case *ast.FencedCodeBlock:
+		return c.processCodeBlock(n, id)
+	case *ast.CodeBlock:
+		return c.processCodeBlock(n, id)
+	case *extast.Table:
+		return c.processTable(n, id)
+	case *ast.List:
+		return c.processList(n, id)
+	case *ast.Blockquote:
+		return c.processBlockquote(n, id)
+	case *ast.ThematicBreak:
+		return c.processThematicBreak(n, id)
+	default:
+		return nil
+	}
+}
+
+// processHeading 处理标题
+func (c *MarkdownChunker) processHeading(heading *ast.Heading, id int) *Chunk {
+	content := c.getNodeRawContent(heading)
+	text := c.getNodeText(heading)
+
+	return &Chunk{
+		ID:      id,
+		Type:    "heading",
+		Content: content,
+		Text:    text,
+		Level:   heading.Level,
+		Metadata: map[string]string{
+			"heading_level": fmt.Sprintf("%d", heading.Level),
+		},
+	}
+}
+
+// processParagraph 处理段落
+func (c *MarkdownChunker) processParagraph(para *ast.Paragraph, id int) *Chunk {
+	content := c.getNodeRawContent(para)
+	text := c.getNodeText(para)
+
+	// 过滤掉空段落
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+
+	return &Chunk{
+		ID:      id,
+		Type:    "paragraph",
+		Content: content,
+		Text:    text,
+		Level:   0,
+		Metadata: map[string]string{
+			"word_count": fmt.Sprintf("%d", len(strings.Fields(text))),
+		},
+	}
+}
+
+// processCodeBlock 处理代码块
+func (c *MarkdownChunker) processCodeBlock(code ast.Node, id int) *Chunk {
+	var language string
+	content := c.getNodeRawContent(code)
+
+	// 提取代码块的纯文本内容，去除尾部空行
+	var codeLines []string
+	for i := 0; i < code.Lines().Len(); i++ {
+		line := code.Lines().At(i)
+		codeLines = append(codeLines, string(line.Value(c.source)))
+	}
+
+	// 去除尾部的空行
+	for len(codeLines) > 0 && strings.TrimSpace(codeLines[len(codeLines)-1]) == "" {
+		codeLines = codeLines[:len(codeLines)-1]
+	}
+
+	var textBuf bytes.Buffer
+	for i, line := range codeLines {
+		textBuf.WriteString(strings.TrimRight(line, "\n"))
+		if i < len(codeLines)-1 {
+			textBuf.WriteByte('\n')
+		}
+	}
+	text := textBuf.String()
+
+	// 获取代码语言
+	if fenced, ok := code.(*ast.FencedCodeBlock); ok {
+		if fenced.Info != nil {
+			language = strings.TrimSpace(string(fenced.Info.Text(c.source)))
+		}
+	}
+
+	// 计算行数（使用清理后的行数）
+	lineCount := len(codeLines)
+
+	return &Chunk{
+		ID:      id,
+		Type:    "code",
+		Content: content,
+		Text:    text,
+		Level:   0,
+		Metadata: map[string]string{
+			"language":   language,
+			"line_count": fmt.Sprintf("%d", lineCount),
+		},
+	}
+}
+
+// processTable 处理表格
+func (c *MarkdownChunker) processTable(table *extast.Table, id int) *Chunk {
+	content := c.getNodeRawContent(table)
+	text := c.getNodeText(table)
+
+	// 计算表格维度
+	rowCount := 0
+	colCount := 0
+
+	// 遍历表格行
+	for child := table.FirstChild(); child != nil; child = child.NextSibling() {
+		if tableRow, ok := child.(*extast.TableRow); ok {
+			rowCount++
+			currentColCount := 0
+			// 计算列数
+			for cell := tableRow.FirstChild(); cell != nil; cell = cell.NextSibling() {
+				if _, ok := cell.(*extast.TableCell); ok {
+					currentColCount++
+				}
+			}
+			if currentColCount > colCount {
+				colCount = currentColCount
+			}
+		}
+	}
+
+	// 对于markdown表格，需要正确计算行数
+	// goldmark会将分隔行也作为一个TableRow，但我们不应该计算它
+	// 通过分析原始内容来确定实际行数
+	if content != "" {
+		lines := strings.Split(strings.TrimSpace(content), "\n")
+		actualRowCount := 0
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "|") && !strings.Contains(line, "---") {
+				actualRowCount++
+			}
+		}
+		if actualRowCount > 0 {
+			rowCount = actualRowCount
+		}
+	}
+
+	return &Chunk{
+		ID:      id,
+		Type:    "table",
+		Content: content,
+		Text:    text,
+		Level:   0,
+		Metadata: map[string]string{
+			"rows":    fmt.Sprintf("%d", rowCount),
+			"columns": fmt.Sprintf("%d", colCount),
+		},
+	}
+}
+
+// processList 处理列表
+func (c *MarkdownChunker) processList(list *ast.List, id int) *Chunk {
+	content := c.getNodeRawContent(list)
+	text := c.getListText(list)
+
+	listType := "unordered"
+	if list.IsOrdered() {
+		listType = "ordered"
+	}
+
+	// 计算列表项数量
+	itemCount := 0
+	for child := list.FirstChild(); child != nil; child = child.NextSibling() {
+		if _, ok := child.(*ast.ListItem); ok {
+			itemCount++
+		}
+	}
+
+	return &Chunk{
+		ID:      id,
+		Type:    "list",
+		Content: content,
+		Text:    text,
+		Level:   0,
+		Metadata: map[string]string{
+			"list_type":  listType,
+			"item_count": fmt.Sprintf("%d", itemCount),
+		},
+	}
+}
+
+// getListText 获取列表的纯文本内容，确保项目之间有空格
+func (c *MarkdownChunker) getListText(list *ast.List) string {
+	var items []string
+
+	for child := list.FirstChild(); child != nil; child = child.NextSibling() {
+		if listItem, ok := child.(*ast.ListItem); ok {
+			text := c.getNodeText(listItem)
+			items = append(items, text)
+		}
+	}
+
+	return strings.Join(items, " ")
+}
+
+// processBlockquote 处理引用块
+func (c *MarkdownChunker) processBlockquote(quote *ast.Blockquote, id int) *Chunk {
+	content := c.getNodeRawContent(quote)
+	text := c.getNodeText(quote)
+
+	return &Chunk{
+		ID:      id,
+		Type:    "blockquote",
+		Content: content,
+		Text:    text,
+		Level:   0,
+		Metadata: map[string]string{
+			"word_count": fmt.Sprintf("%d", len(strings.Fields(text))),
+		},
+	}
+}
+
+// processThematicBreak 处理分隔线
+func (c *MarkdownChunker) processThematicBreak(hr *ast.ThematicBreak, id int) *Chunk {
+	content := c.getNodeRawContent(hr)
+
+	return &Chunk{
+		ID:      id,
+		Type:    "thematic_break",
+		Content: content,
+		Text:    "---",
+		Level:   0,
+		Metadata: map[string]string{
+			"type": "horizontal_rule",
+		},
+	}
+}
+
+// getNodeRawContent 获取节点的原始 markdown 内容
+func (c *MarkdownChunker) getNodeRawContent(node ast.Node) string {
+	// 特殊处理某些节点类型
+	switch n := node.(type) {
+	case *ast.ThematicBreak:
+		return "---"
+	case *ast.Heading:
+		// 对于标题，确保包含 # 符号
+		text := c.getNodeText(n)
+		prefix := strings.Repeat("#", n.Level) + " "
+		return prefix + text
+	case *ast.FencedCodeBlock:
+		// 处理围栏代码块
+		var buf bytes.Buffer
+
+		// 添加开始的围栏
+		buf.WriteString("```")
+		if n.Info != nil {
+			buf.Write(n.Info.Text(c.source))
+		}
+		buf.WriteByte('\n')
+
+		// 添加代码内容，去除尾部空行
+		var codeLines []string
+		for i := 0; i < n.Lines().Len(); i++ {
+			line := n.Lines().At(i)
+			codeLines = append(codeLines, string(line.Value(c.source)))
+		}
+
+		// 去除尾部的空行
+		for len(codeLines) > 0 && strings.TrimSpace(codeLines[len(codeLines)-1]) == "" {
+			codeLines = codeLines[:len(codeLines)-1]
+		}
+
+		for i, line := range codeLines {
+			buf.WriteString(strings.TrimRight(line, "\n"))
+			if i < len(codeLines)-1 {
+				buf.WriteByte('\n')
+			}
+		}
+
+		// 添加结束的围栏
+		buf.WriteString("\n```")
+		return buf.String()
+	case *ast.CodeBlock:
+		// 处理缩进代码块
+		var buf bytes.Buffer
+		var codeLines []string
+		for i := 0; i < n.Lines().Len(); i++ {
+			line := n.Lines().At(i)
+			codeLines = append(codeLines, string(line.Value(c.source)))
+		}
+
+		// 去除尾部的空行
+		for len(codeLines) > 0 && strings.TrimSpace(codeLines[len(codeLines)-1]) == "" {
+			codeLines = codeLines[:len(codeLines)-1]
+		}
+
+		for i, line := range codeLines {
+			buf.WriteString("    ") // 添加4个空格的缩进
+			buf.WriteString(strings.TrimRight(line, "\n"))
+			if i < len(codeLines)-1 {
+				buf.WriteByte('\n')
+			}
+		}
+		return buf.String()
+	case *ast.List:
+		// 处理列表
+		return c.reconstructList(n)
+	case *ast.Blockquote:
+		// 处理引用块，需要从子节点重构
+		return c.reconstructBlockquote(n)
+	case *extast.Table:
+		// 处理表格，需要从子节点重构
+		return c.reconstructTable(n)
+	}
+
+	// 对于有Lines的节点，直接提取原始内容
+	if node.Lines().Len() > 0 {
+		var buf bytes.Buffer
+		for i := 0; i < node.Lines().Len(); i++ {
+			line := node.Lines().At(i)
+			buf.Write(line.Value(c.source))
+			// 保持原始换行符，除了最后一行
+			if i < node.Lines().Len()-1 {
+				buf.WriteByte('\n')
+			}
+		}
+		return strings.TrimRight(buf.String(), "\n")
+	}
+
+	return ""
+}
+
+// reconstructList 重构列表的原始markdown
+func (c *MarkdownChunker) reconstructList(list *ast.List) string {
+	var buf bytes.Buffer
+	itemIndex := 1
+
+	for child := list.FirstChild(); child != nil; child = child.NextSibling() {
+		if listItem, ok := child.(*ast.ListItem); ok {
+			// 添加列表标记
+			if list.IsOrdered() {
+				buf.WriteString(fmt.Sprintf("%d. ", itemIndex))
+				itemIndex++
+			} else {
+				buf.WriteString("- ")
+			}
+
+			// 添加列表项内容
+			text := c.getNodeText(listItem)
+			buf.WriteString(text)
+
+			// 如果不是最后一项，添加换行
+			if child.NextSibling() != nil {
+				buf.WriteByte('\n')
+			}
+		}
+	}
+
+	return buf.String()
+}
+
+// reconstructBlockquote 重构引用块的原始markdown
+func (c *MarkdownChunker) reconstructBlockquote(quote *ast.Blockquote) string {
+	var buf bytes.Buffer
+
+	// 遍历blockquote的子节点（通常是段落）
+	for child := quote.FirstChild(); child != nil; child = child.NextSibling() {
+		if para, ok := child.(*ast.Paragraph); ok {
+			// 从段落的每一行重构blockquote
+			for i := 0; i < para.Lines().Len(); i++ {
+				line := para.Lines().At(i)
+				buf.WriteString("> ")
+				// 去除行尾的换行符，因为我们会自己添加
+				lineContent := strings.TrimRight(string(line.Value(c.source)), "\n")
+				buf.WriteString(lineContent)
+				if i < para.Lines().Len()-1 {
+					buf.WriteByte('\n')
+				}
+			}
+		}
+	}
+
+	return buf.String()
+}
+
+// reconstructTable 重构表格的原始markdown
+func (c *MarkdownChunker) reconstructTable(table *extast.Table) string {
+	// 对于表格，我们需要从原始源码中提取完整的表格内容
+	// 因为goldmark的表格AST结构比较复杂，直接从源码重构更可靠
+
+	// 找到表格在源码中的位置
+	// 这是一个简化的方法，假设表格是连续的行
+	lines := strings.Split(string(c.source), "\n")
+	var tableLines []string
+	inTable := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "|") {
+			tableLines = append(tableLines, line)
+			inTable = true
+		} else if inTable {
+			// 如果我们已经在表格中，但遇到了非表格行，表格结束
+			break
+		}
+	}
+
+	return strings.Join(tableLines, "\n")
+}
+
+// getNodeText 获取节点的纯文本内容
+func (c *MarkdownChunker) getNodeText(node ast.Node) string {
+	var buf bytes.Buffer
+
+	// 遍历所有子节点提取文本
+	err := ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering {
+			switch n.Kind() {
+			case ast.KindText:
+				text := n.(*ast.Text)
+				segment := text.Segment
+				// 安全地获取文本内容，避免越界
+				if segment.Start < len(c.source) && segment.Stop <= len(c.source) && segment.Start <= segment.Stop {
+					buf.Write(segment.Value(c.source))
+				}
+				if text.HardLineBreak() || text.SoftLineBreak() {
+					buf.WriteString(" ")
+				}
+			case ast.KindAutoLink:
+				autolink := n.(*ast.AutoLink)
+				segment := autolink.URL(c.source)
+				buf.Write(segment)
+			case ast.KindCodeSpan:
+				codeSpan := n.(*ast.CodeSpan)
+				// 处理代码段的文本内容
+				if codeSpan.HasChildren() {
+					// 递归处理子节点
+				} else {
+					// 直接从子节点获取文本
+					for child := codeSpan.FirstChild(); child != nil; child = child.NextSibling() {
+						if textNode, ok := child.(*ast.Text); ok {
+							buf.Write(textNode.Segment.Value(c.source))
+						}
+					}
+				}
+			case ast.KindEmphasis:
+				// 强调标记本身不添加文本，只处理其子节点
+			case ast.KindLink:
+				// 链接的文本由其子节点处理
+			case ast.KindImage:
+				// 图片显示alt文本
+				img := n.(*ast.Image)
+				if img.Title != nil {
+					buf.Write(img.Title)
+				}
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+	if err != nil {
+		return ""
+	}
+
+	// 清理多余的空格
+	text := strings.TrimSpace(buf.String())
+	// 将多个连续空格替换为单个空格
+	text = strings.Join(strings.Fields(text), " ")
+
+	return text
+}
