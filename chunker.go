@@ -24,15 +24,139 @@ type Chunk struct {
 	Metadata map[string]string `json:"metadata"`
 }
 
-// MarkdownChunker Markdown 分块器
-type MarkdownChunker struct {
-	md     goldmark.Markdown
-	chunks []Chunk
-	source []byte
+// ErrorHandlingMode 错误处理模式
+type ErrorHandlingMode int
+
+const (
+	// ErrorModeStrict 严格模式，遇到错误立即返回
+	ErrorModeStrict ErrorHandlingMode = iota
+	// ErrorModePermissive 宽松模式，记录错误但继续处理
+	ErrorModePermissive
+	// ErrorModeSilent 静默模式，忽略错误
+	ErrorModeSilent
+)
+
+// PerformanceMode 性能模式
+type PerformanceMode int
+
+const (
+	// PerformanceModeDefault 默认性能模式
+	PerformanceModeDefault PerformanceMode = iota
+	// PerformanceModeMemoryOptimized 内存优化模式
+	PerformanceModeMemoryOptimized
+	// PerformanceModeSpeedOptimized 速度优化模式
+	PerformanceModeSpeedOptimized
+)
+
+// MetadataExtractor 元数据提取器接口
+type MetadataExtractor interface {
+	// Extract 从AST节点中提取元数据
+	Extract(node ast.Node, source []byte) map[string]string
+	// SupportedTypes 返回支持的内容类型
+	SupportedTypes() []string
 }
 
-// NewMarkdownChunker 创建新的分块器
+// ChunkerConfig 分块器配置
+type ChunkerConfig struct {
+	// MaxChunkSize 最大块大小（字符数），0表示无限制
+	MaxChunkSize int
+
+	// EnabledTypes 启用的内容类型，nil表示启用所有类型
+	EnabledTypes map[string]bool
+
+	// CustomExtractors 自定义元数据提取器
+	CustomExtractors []MetadataExtractor
+
+	// ErrorHandling 错误处理模式
+	ErrorHandling ErrorHandlingMode
+
+	// PerformanceMode 性能模式
+	PerformanceMode PerformanceMode
+
+	// FilterEmptyChunks 是否过滤空块
+	FilterEmptyChunks bool
+
+	// PreserveWhitespace 是否保留空白字符
+	PreserveWhitespace bool
+}
+
+// MarkdownChunker Markdown 分块器
+type MarkdownChunker struct {
+	md           goldmark.Markdown
+	config       *ChunkerConfig
+	errorHandler ErrorHandler
+	chunks       []Chunk
+	source       []byte
+}
+
+// DefaultConfig 返回默认配置
+func DefaultConfig() *ChunkerConfig {
+	return &ChunkerConfig{
+		MaxChunkSize:       0,   // 无限制
+		EnabledTypes:       nil, // 启用所有类型
+		CustomExtractors:   []MetadataExtractor{},
+		ErrorHandling:      ErrorModePermissive,
+		PerformanceMode:    PerformanceModeDefault,
+		FilterEmptyChunks:  true,
+		PreserveWhitespace: false,
+	}
+}
+
+// ValidateConfig 验证配置的有效性
+func ValidateConfig(config *ChunkerConfig) error {
+	if config == nil {
+		return fmt.Errorf("config cannot be nil")
+	}
+
+	if config.MaxChunkSize < 0 {
+		return fmt.Errorf("MaxChunkSize cannot be negative")
+	}
+
+	// 验证启用的类型
+	if config.EnabledTypes != nil {
+		validTypes := map[string]bool{
+			"heading": true, "paragraph": true, "code": true,
+			"table": true, "list": true, "blockquote": true,
+			"thematic_break": true,
+		}
+
+		for typeName := range config.EnabledTypes {
+			if !validTypes[typeName] {
+				return fmt.Errorf("invalid content type: %s", typeName)
+			}
+		}
+	}
+
+	return nil
+}
+
+// isTypeEnabled 检查指定类型是否启用
+func (c *MarkdownChunker) isTypeEnabled(chunkType string) bool {
+	if c.config.EnabledTypes == nil {
+		return true // 如果没有指定，则启用所有类型
+	}
+
+	enabled, exists := c.config.EnabledTypes[chunkType]
+	return exists && enabled
+}
+
+// NewMarkdownChunker 创建新的分块器，使用默认配置
 func NewMarkdownChunker() *MarkdownChunker {
+	return NewMarkdownChunkerWithConfig(DefaultConfig())
+}
+
+// NewMarkdownChunkerWithConfig 使用指定配置创建新的分块器
+func NewMarkdownChunkerWithConfig(config *ChunkerConfig) *MarkdownChunker {
+	if config == nil {
+		config = DefaultConfig()
+	}
+
+	// 验证配置
+	if err := ValidateConfig(config); err != nil {
+		// 如果配置无效，使用默认配置
+		config = DefaultConfig()
+	}
+
 	md := goldmark.New(
 		goldmark.WithExtensions(
 			extension.GFM, // GitHub Flavored Markdown (包含表格支持)
@@ -47,13 +171,37 @@ func NewMarkdownChunker() *MarkdownChunker {
 	)
 
 	return &MarkdownChunker{
-		md:     md,
-		chunks: []Chunk{},
+		md:           md,
+		config:       config,
+		errorHandler: NewDefaultErrorHandler(config.ErrorHandling),
+		chunks:       []Chunk{},
 	}
 }
 
 // ChunkDocument 对整个文档进行分块
 func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
+	// 清除之前的错误
+	c.errorHandler.ClearErrors()
+
+	// 输入验证
+	if content == nil {
+		err := NewChunkerError(ErrorTypeInvalidInput, "content cannot be nil", nil)
+		if handlerErr := c.errorHandler.HandleError(err); handlerErr != nil {
+			return nil, handlerErr
+		}
+		return []Chunk{}, nil
+	}
+
+	// 检查内容大小
+	if len(content) > 100*1024*1024 { // 100MB 限制
+		err := NewChunkerError(ErrorTypeMemoryExhausted, "content too large", nil).
+			WithContext("size", len(content)).
+			WithContext("limit", 100*1024*1024)
+		if handlerErr := c.errorHandler.HandleError(err); handlerErr != nil {
+			return nil, handlerErr
+		}
+	}
+
 	c.source = content
 	c.chunks = []Chunk{}
 
@@ -66,12 +214,99 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 	for child := doc.FirstChild(); child != nil; child = child.NextSibling() {
 		chunk := c.processNode(child, chunkID)
 		if chunk != nil {
+			// 检查类型是否启用
+			if !c.isTypeEnabled(chunk.Type) {
+				continue
+			}
+
+			// 检查是否过滤空块
+			if c.config.FilterEmptyChunks && strings.TrimSpace(chunk.Text) == "" {
+				continue
+			}
+
+			// 检查块大小限制
+			if c.config.MaxChunkSize > 0 && len(chunk.Content) > c.config.MaxChunkSize {
+				err := NewChunkerError(ErrorTypeChunkTooLarge, "chunk size exceeds maximum", nil).
+					WithContext("chunk_size", len(chunk.Content)).
+					WithContext("max_size", c.config.MaxChunkSize).
+					WithContext("chunk_type", chunk.Type).
+					WithContext("chunk_id", chunk.ID)
+
+				if handlerErr := c.errorHandler.HandleError(err); handlerErr != nil {
+					return nil, handlerErr
+				}
+
+				// 在宽松模式下截断内容
+				if c.config.ErrorHandling != ErrorModeStrict {
+					chunk.Content = chunk.Content[:c.config.MaxChunkSize]
+					chunk.Text = chunk.Text[:min(len(chunk.Text), c.config.MaxChunkSize)]
+				}
+			}
+
+			// 应用自定义元数据提取器
+			for _, extractor := range c.config.CustomExtractors {
+				supportedTypes := extractor.SupportedTypes()
+				if len(supportedTypes) == 0 || contains(supportedTypes, chunk.Type) {
+					customMetadata := extractor.Extract(child, c.source)
+					for key, value := range customMetadata {
+						chunk.Metadata[key] = value
+					}
+				}
+			}
+
 			c.chunks = append(c.chunks, *chunk)
 			chunkID++
 		}
 	}
 
 	return c.chunks, nil
+}
+
+// GetErrors 获取处理过程中的所有错误
+func (c *MarkdownChunker) GetErrors() []*ChunkerError {
+	return c.errorHandler.GetErrors()
+}
+
+// HasErrors 检查是否有错误
+func (c *MarkdownChunker) HasErrors() bool {
+	return c.errorHandler.HasErrors()
+}
+
+// ClearErrors 清除所有错误
+func (c *MarkdownChunker) ClearErrors() {
+	c.errorHandler.ClearErrors()
+}
+
+// GetErrorsByType 按类型获取错误
+func (c *MarkdownChunker) GetErrorsByType(errorType ErrorType) []*ChunkerError {
+	if handler, ok := c.errorHandler.(*DefaultErrorHandler); ok {
+		return handler.GetErrorsByType(errorType)
+	}
+	// 如果不是默认处理器，遍历所有错误
+	var filtered []*ChunkerError
+	for _, err := range c.errorHandler.GetErrors() {
+		if err.Type == errorType {
+			filtered = append(filtered, err)
+		}
+	}
+	return filtered
+}
+
+// 辅助函数
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
 
 // processNode 处理单个 AST 节点
