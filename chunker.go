@@ -78,15 +78,24 @@ type ChunkerConfig struct {
 
 	// PreserveWhitespace 是否保留空白字符
 	PreserveWhitespace bool
+
+	// MemoryLimit 内存使用限制（字节），0表示无限制
+	MemoryLimit int64
+
+	// EnableObjectPooling 是否启用对象池化
+	EnableObjectPooling bool
 }
 
 // MarkdownChunker Markdown 分块器
 type MarkdownChunker struct {
-	md           goldmark.Markdown
-	config       *ChunkerConfig
-	errorHandler ErrorHandler
-	chunks       []Chunk
-	source       []byte
+	md                 goldmark.Markdown
+	config             *ChunkerConfig
+	errorHandler       ErrorHandler
+	performanceMonitor *PerformanceMonitor
+	memoryOptimizer    *MemoryOptimizer
+	stringOps          *OptimizedStringOperations
+	chunks             []Chunk
+	source             []byte
 }
 
 // DefaultConfig 返回默认配置
@@ -171,15 +180,23 @@ func NewMarkdownChunkerWithConfig(config *ChunkerConfig) *MarkdownChunker {
 	)
 
 	return &MarkdownChunker{
-		md:           md,
-		config:       config,
-		errorHandler: NewDefaultErrorHandler(config.ErrorHandling),
-		chunks:       []Chunk{},
+		md:                 md,
+		config:             config,
+		errorHandler:       NewDefaultErrorHandler(config.ErrorHandling),
+		performanceMonitor: NewPerformanceMonitor(),
+		chunks:             []Chunk{},
 	}
 }
 
 // ChunkDocument 对整个文档进行分块
 func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
+	// 开始性能监控
+	c.performanceMonitor.Start()
+	defer c.performanceMonitor.Stop()
+
+	// 记录输入文档大小
+	c.performanceMonitor.RecordBytes(int64(len(content)))
+
 	// 清除之前的错误
 	c.errorHandler.ClearErrors()
 
@@ -255,6 +272,10 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 			}
 
 			c.chunks = append(c.chunks, *chunk)
+
+			// 记录处理的块
+			c.performanceMonitor.RecordChunk(chunk)
+
 			chunkID++
 		}
 	}
@@ -290,6 +311,21 @@ func (c *MarkdownChunker) GetErrorsByType(errorType ErrorType) []*ChunkerError {
 		}
 	}
 	return filtered
+}
+
+// GetPerformanceStats 获取性能统计信息
+func (c *MarkdownChunker) GetPerformanceStats() PerformanceStats {
+	return c.performanceMonitor.GetStats()
+}
+
+// GetPerformanceMonitor 获取性能监控器（用于高级用法）
+func (c *MarkdownChunker) GetPerformanceMonitor() *PerformanceMonitor {
+	return c.performanceMonitor
+}
+
+// ResetPerformanceMonitor 重置性能监控器
+func (c *MarkdownChunker) ResetPerformanceMonitor() {
+	c.performanceMonitor.Reset()
 }
 
 // 辅助函数
@@ -426,54 +462,28 @@ func (c *MarkdownChunker) processTable(table *extast.Table, id int) *Chunk {
 	content := c.getNodeRawContent(table)
 	text := c.getNodeText(table)
 
-	// 计算表格维度
-	rowCount := 0
-	colCount := 0
+	// 使用高级表格处理器分析表格
+	processor := NewAdvancedTableProcessor(c.source)
+	tableInfo := processor.ProcessTable(table)
 
-	// 遍历表格行
-	for child := table.FirstChild(); child != nil; child = child.NextSibling() {
-		if tableRow, ok := child.(*extast.TableRow); ok {
-			rowCount++
-			currentColCount := 0
-			// 计算列数
-			for cell := tableRow.FirstChild(); cell != nil; cell = cell.NextSibling() {
-				if _, ok := cell.(*extast.TableCell); ok {
-					currentColCount++
-				}
-			}
-			if currentColCount > colCount {
-				colCount = currentColCount
-			}
-		}
-	}
+	// 获取基础元数据
+	metadata := tableInfo.GetTableMetadata()
 
-	// goldmark 解析表格时，会将表头和数据行都作为 TableRow
-	// 但是在原始 markdown 中，我们需要计算实际的行数（包括表头）
-	// 通过分析原始内容来确定实际行数
-	if content != "" {
-		lines := strings.Split(strings.TrimSpace(content), "\n")
-		actualRowCount := 0
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "|") && !strings.Contains(line, "---") {
-				actualRowCount++
-			}
-		}
-		if actualRowCount > 0 {
-			rowCount = actualRowCount
-		}
+	// 如果表格格式有问题，记录错误
+	if !tableInfo.IsWellFormed && len(tableInfo.Errors) > 0 {
+		err := NewChunkerError(ErrorTypeParsingFailed, "table format issues detected", nil).
+			WithContext("table_errors", strings.Join(tableInfo.Errors, "; ")).
+			WithContext("chunk_id", id)
+		c.errorHandler.HandleError(err)
 	}
 
 	return &Chunk{
-		ID:      id,
-		Type:    "table",
-		Content: content,
-		Text:    text,
-		Level:   0,
-		Metadata: map[string]string{
-			"rows":    fmt.Sprintf("%d", rowCount),
-			"columns": fmt.Sprintf("%d", colCount),
-		},
+		ID:       id,
+		Type:     "table",
+		Content:  content,
+		Text:     text,
+		Level:    0,
+		Metadata: metadata,
 	}
 }
 
