@@ -251,7 +251,7 @@ func TestPerformanceMonitor_LargeDocument(t *testing.T) {
 
 	// 创建一个大文档
 	var builder strings.Builder
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		builder.WriteString("# Heading ")
 		builder.WriteString(string(rune('A' + i%26)))
 		builder.WriteString("\n\n")
@@ -311,7 +311,7 @@ func TestPerformanceMonitor_MemoryTracking(t *testing.T) {
 	pm.Start()
 
 	// 创建一些大的块来测试内存跟踪
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		chunk := &Chunk{
 			ID:      i,
 			Type:    "paragraph",
@@ -347,8 +347,7 @@ func BenchmarkPerformanceMonitor_RecordChunk(b *testing.B) {
 		Text:    "Test content for benchmarking",
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		pm.RecordChunk(chunk)
 	}
 }
@@ -366,8 +365,7 @@ func BenchmarkPerformanceMonitor_GetStats(b *testing.B) {
 	}
 	pm.RecordChunk(chunk)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		pm.GetStats()
 	}
 }

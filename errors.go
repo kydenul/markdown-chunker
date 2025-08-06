@@ -45,11 +45,11 @@ func (et ErrorType) String() string {
 
 // ChunkerError 分块器错误
 type ChunkerError struct {
-	Type      ErrorType              `json:"type"`
-	Message   string                 `json:"message"`
-	Context   map[string]interface{} `json:"context"`
-	Cause     error                  `json:"cause,omitempty"`
-	Timestamp time.Time              `json:"timestamp"`
+	Type      ErrorType      `json:"type"`
+	Message   string         `json:"message"`
+	Context   map[string]any `json:"context"`
+	Cause     error          `json:"cause,omitempty"`
+	Timestamp time.Time      `json:"timestamp"`
 }
 
 // Error 实现 error 接口
@@ -70,14 +70,14 @@ func NewChunkerError(errorType ErrorType, message string, cause error) *ChunkerE
 	return &ChunkerError{
 		Type:      errorType,
 		Message:   message,
-		Context:   make(map[string]interface{}),
+		Context:   make(map[string]any),
 		Cause:     cause,
 		Timestamp: time.Now(),
 	}
 }
 
 // WithContext 添加上下文信息
-func (e *ChunkerError) WithContext(key string, value interface{}) *ChunkerError {
+func (e *ChunkerError) WithContext(key string, value any) *ChunkerError {
 	e.Context[key] = value
 	return e
 }

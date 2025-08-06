@@ -118,10 +118,7 @@ func (pm *PerformanceMonitor) GetStats() PerformanceStats {
 		bytesPerSecond = float64(pm.totalBytes) / seconds
 	}
 
-	memoryUsed := pm.peakMemory - pm.initialMemory
-	if memoryUsed < 0 {
-		memoryUsed = 0
-	}
+	memoryUsed := max(pm.peakMemory-pm.initialMemory, 0)
 
 	return PerformanceStats{
 		ProcessingTime:  processingTime,

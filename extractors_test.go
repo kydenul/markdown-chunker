@@ -1,6 +1,7 @@
 package markdownchunker
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -181,15 +182,15 @@ func TestHelperFunctions(t *testing.T) {
 	t.Run("contains function", func(t *testing.T) {
 		slice := []string{"apple", "banana", "cherry"}
 
-		if !contains(slice, "banana") {
+		if !slices.Contains(slice, "banana") {
 			t.Error("Expected contains to return true for 'banana'")
 		}
 
-		if contains(slice, "grape") {
+		if slices.Contains(slice, "grape") {
 			t.Error("Expected contains to return false for 'grape'")
 		}
 
-		if contains([]string{}, "anything") {
+		if slices.Contains([]string{}, "anything") {
 			t.Error("Expected contains to return false for empty slice")
 		}
 	})

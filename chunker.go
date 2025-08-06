@@ -3,6 +3,8 @@ package markdownchunker
 import (
 	"bytes"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -263,11 +265,8 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 			// 应用自定义元数据提取器
 			for _, extractor := range c.config.CustomExtractors {
 				supportedTypes := extractor.SupportedTypes()
-				if len(supportedTypes) == 0 || contains(supportedTypes, chunk.Type) {
-					customMetadata := extractor.Extract(child, c.source)
-					for key, value := range customMetadata {
-						chunk.Metadata[key] = value
-					}
+				if len(supportedTypes) == 0 || slices.Contains(supportedTypes, chunk.Type) {
+					maps.Copy(chunk.Metadata, extractor.Extract(child, c.source))
 				}
 			}
 
@@ -326,23 +325,6 @@ func (c *MarkdownChunker) GetPerformanceMonitor() *PerformanceMonitor {
 // ResetPerformanceMonitor 重置性能监控器
 func (c *MarkdownChunker) ResetPerformanceMonitor() {
 	c.performanceMonitor.Reset()
-}
-
-// 辅助函数
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }
 
 // processNode 处理单个 AST 节点

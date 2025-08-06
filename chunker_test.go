@@ -551,9 +551,8 @@ This is a paragraph.
 - Item 2`
 
 	chunker := NewMarkdownChunker()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := chunker.ChunkDocument([]byte(markdown))
 		if err != nil {
 			b.Fatal(err)
@@ -564,7 +563,7 @@ This is a paragraph.
 func BenchmarkChunkDocument_Large(b *testing.B) {
 	// Create a large markdown document
 	var markdown strings.Builder
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		markdown.WriteString(fmt.Sprintf("# Heading %d\n\n", i))
 		markdown.WriteString("This is a paragraph with some content.\n\n")
 		markdown.WriteString("```go\nfunc example() {\n    return nil\n}\n```\n\n")
@@ -573,9 +572,8 @@ func BenchmarkChunkDocument_Large(b *testing.B) {
 
 	chunker := NewMarkdownChunker()
 	content := []byte(markdown.String())
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := chunker.ChunkDocument(content)
 		if err != nil {
 			b.Fatal(err)
@@ -584,7 +582,7 @@ func BenchmarkChunkDocument_Large(b *testing.B) {
 }
 
 func BenchmarkNewMarkdownChunker(b *testing.B) {
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = NewMarkdownChunker()
 	}
 }
@@ -607,7 +605,7 @@ func TestChunkDocument_VeryLargeContent(t *testing.T) {
 	chunker := NewMarkdownChunker()
 	// Create a very large markdown document (1MB+)
 	var largeContent strings.Builder
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		largeContent.WriteString(fmt.Sprintf("# Heading %d\n\nThis is paragraph %d with some content.\n\n", i, i))
 	}
 
@@ -954,7 +952,7 @@ func TestChunkDocument_ConcurrentAccess(t *testing.T) {
 	results := make(chan []Chunk, numGoroutines)
 	errors := make(chan error, numGoroutines)
 
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		go func() {
 			// Create a new chunker instance for each goroutine
 			chunker := NewMarkdownChunker()
@@ -968,7 +966,7 @@ func TestChunkDocument_ConcurrentAccess(t *testing.T) {
 	}
 
 	// Collect results
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		select {
 		case err := <-errors:
 			t.Fatalf("Concurrent access failed: %v", err)
@@ -986,7 +984,7 @@ func TestChunkDocument_MemoryEfficiency(t *testing.T) {
 	markdown := "# Test\n\nMemory test paragraph."
 
 	// Process the same content multiple times
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		chunks, err := chunker.ChunkDocument([]byte(markdown))
 		if err != nil {
 			t.Fatalf("ChunkDocument() error on iteration %d: %v", i, err)

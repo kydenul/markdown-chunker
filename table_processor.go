@@ -146,8 +146,8 @@ func (p *AdvancedTableProcessor) extractAlignments(tableLines []string, info *Ta
 	for _, line := range tableLines {
 		if strings.Contains(line, "---") {
 			// 解析对齐信息
-			cells := strings.Split(line, "|")
-			for _, cell := range cells {
+			cells := strings.SplitSeq(line, "|")
+			for cell := range cells {
 				cell = strings.TrimSpace(cell)
 				if cell == "" {
 					continue
