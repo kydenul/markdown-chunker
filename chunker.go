@@ -2,6 +2,8 @@ package markdownchunker
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"slices"
@@ -16,6 +18,30 @@ import (
 	"github.com/yuin/goldmark/text"
 )
 
+// ChunkPosition 表示块在文档中的位置
+type ChunkPosition struct {
+	StartLine int `json:"start_line"` // 起始行号（从1开始）
+	EndLine   int `json:"end_line"`   // 结束行号（从1开始）
+	StartCol  int `json:"start_col"`  // 起始列号（从1开始）
+	EndCol    int `json:"end_col"`    // 结束列号（从1开始）
+}
+
+// Link 表示链接信息
+type Link struct {
+	Text string `json:"text"` // 链接文本
+	URL  string `json:"url"`  // 链接地址
+	Type string `json:"type"` // 链接类型：internal, external, anchor
+}
+
+// Image 表示图片信息
+type Image struct {
+	Alt    string `json:"alt"`    // 替代文本
+	URL    string `json:"url"`    // 图片地址
+	Title  string `json:"title"`  // 图片标题
+	Width  string `json:"width"`  // 图片宽度
+	Height string `json:"height"` // 图片高度
+}
+
 // Chunk 表示分块后的内容
 type Chunk struct {
 	ID       int               `json:"id"`
@@ -24,6 +50,12 @@ type Chunk struct {
 	Text     string            `json:"text"`    // 纯文本内容，用于向量化
 	Level    int               `json:"level"`   // 标题层级 (仅对 heading 有效)
 	Metadata map[string]string `json:"metadata"`
+
+	// 新增字段
+	Position ChunkPosition `json:"position"` // 在文档中的位置
+	Links    []Link        `json:"links"`    // 包含的链接
+	Images   []Image       `json:"images"`   // 包含的图片
+	Hash     string        `json:"hash"`     // 内容哈希，用于去重
 }
 
 // ErrorHandlingMode 错误处理模式
@@ -355,13 +387,21 @@ func (c *MarkdownChunker) processNode(node ast.Node, id int) *Chunk {
 func (c *MarkdownChunker) processHeading(heading *ast.Heading, id int) *Chunk {
 	content := c.getNodeRawContent(heading)
 	text := c.getNodeText(heading)
+	position := c.calculatePosition(heading)
+	links := c.extractLinks(heading)
+	images := c.extractImages(heading)
+	hash := c.calculateContentHash(content)
 
 	return &Chunk{
-		ID:      id,
-		Type:    "heading",
-		Content: content,
-		Text:    text,
-		Level:   heading.Level,
+		ID:       id,
+		Type:     "heading",
+		Content:  content,
+		Text:     text,
+		Level:    heading.Level,
+		Position: position,
+		Links:    links,
+		Images:   images,
+		Hash:     hash,
 		Metadata: map[string]string{
 			"heading_level": fmt.Sprintf("%d", heading.Level),
 			"level":         fmt.Sprintf("%d", heading.Level), // 为了兼容性
@@ -380,12 +420,21 @@ func (c *MarkdownChunker) processParagraph(para *ast.Paragraph, id int) *Chunk {
 		return nil
 	}
 
+	position := c.calculatePosition(para)
+	links := c.extractLinks(para)
+	images := c.extractImages(para)
+	hash := c.calculateContentHash(content)
+
 	return &Chunk{
-		ID:      id,
-		Type:    "paragraph",
-		Content: content,
-		Text:    text,
-		Level:   0,
+		ID:       id,
+		Type:     "paragraph",
+		Content:  content,
+		Text:     text,
+		Level:    0,
+		Position: position,
+		Links:    links,
+		Images:   images,
+		Hash:     hash,
 		Metadata: map[string]string{
 			"word_count": fmt.Sprintf("%d", len(strings.Fields(text))),
 			"char_count": fmt.Sprintf("%d", len(text)),
@@ -429,12 +478,21 @@ func (c *MarkdownChunker) processCodeBlock(code ast.Node, id int) *Chunk {
 	// 计算行数（使用清理后的行数）
 	lineCount := len(codeLines)
 
+	position := c.calculatePosition(code)
+	links := c.extractLinks(code)
+	images := c.extractImages(code)
+	hash := c.calculateContentHash(content)
+
 	return &Chunk{
-		ID:      id,
-		Type:    "code",
-		Content: content,
-		Text:    text,
-		Level:   0,
+		ID:       id,
+		Type:     "code",
+		Content:  content,
+		Text:     text,
+		Level:    0,
+		Position: position,
+		Links:    links,
+		Images:   images,
+		Hash:     hash,
 		Metadata: map[string]string{
 			"language":   language,
 			"line_count": fmt.Sprintf("%d", lineCount),
@@ -462,12 +520,21 @@ func (c *MarkdownChunker) processTable(table *extast.Table, id int) *Chunk {
 		c.errorHandler.HandleError(err)
 	}
 
+	position := c.calculatePosition(table)
+	links := c.extractLinks(table)
+	images := c.extractImages(table)
+	hash := c.calculateContentHash(content)
+
 	return &Chunk{
 		ID:       id,
 		Type:     "table",
 		Content:  content,
 		Text:     text,
 		Level:    0,
+		Position: position,
+		Links:    links,
+		Images:   images,
+		Hash:     hash,
 		Metadata: metadata,
 	}
 }
@@ -490,12 +557,21 @@ func (c *MarkdownChunker) processList(list *ast.List, id int) *Chunk {
 		}
 	}
 
+	position := c.calculatePosition(list)
+	links := c.extractLinks(list)
+	images := c.extractImages(list)
+	hash := c.calculateContentHash(content)
+
 	return &Chunk{
-		ID:      id,
-		Type:    "list",
-		Content: content,
-		Text:    text,
-		Level:   0,
+		ID:       id,
+		Type:     "list",
+		Content:  content,
+		Text:     text,
+		Level:    0,
+		Position: position,
+		Links:    links,
+		Images:   images,
+		Hash:     hash,
 		Metadata: map[string]string{
 			"list_type":  listType,
 			"item_count": fmt.Sprintf("%d", itemCount),
@@ -522,12 +598,21 @@ func (c *MarkdownChunker) processBlockquote(quote *ast.Blockquote, id int) *Chun
 	content := c.getNodeRawContent(quote)
 	text := c.getNodeText(quote)
 
+	position := c.calculatePosition(quote)
+	links := c.extractLinks(quote)
+	images := c.extractImages(quote)
+	hash := c.calculateContentHash(content)
+
 	return &Chunk{
-		ID:      id,
-		Type:    "blockquote",
-		Content: content,
-		Text:    text,
-		Level:   0,
+		ID:       id,
+		Type:     "blockquote",
+		Content:  content,
+		Text:     text,
+		Level:    0,
+		Position: position,
+		Links:    links,
+		Images:   images,
+		Hash:     hash,
 		Metadata: map[string]string{
 			"word_count": fmt.Sprintf("%d", len(strings.Fields(text))),
 		},
@@ -538,12 +623,21 @@ func (c *MarkdownChunker) processBlockquote(quote *ast.Blockquote, id int) *Chun
 func (c *MarkdownChunker) processThematicBreak(hr *ast.ThematicBreak, id int) *Chunk {
 	content := c.getNodeRawContent(hr)
 
+	position := c.calculatePosition(hr)
+	links := c.extractLinks(hr)
+	images := c.extractImages(hr)
+	hash := c.calculateContentHash(content)
+
 	return &Chunk{
-		ID:      id,
-		Type:    "thematic_break",
-		Content: content,
-		Text:    "---",
-		Level:   0,
+		ID:       id,
+		Type:     "thematic_break",
+		Content:  content,
+		Text:     "---",
+		Level:    0,
+		Position: position,
+		Links:    links,
+		Images:   images,
+		Hash:     hash,
 		Metadata: map[string]string{
 			"type": "horizontal_rule",
 		},
@@ -856,4 +950,161 @@ func (c *MarkdownChunker) getNodeText(node ast.Node) string {
 	text = strings.Join(strings.Fields(text), " ")
 
 	return text
+}
+
+// calculateContentHash 计算内容的SHA256哈希值
+func (c *MarkdownChunker) calculateContentHash(content string) string {
+	hash := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(hash[:])
+}
+
+// calculatePosition 计算节点在文档中的位置
+func (c *MarkdownChunker) calculatePosition(node ast.Node) ChunkPosition {
+	// 默认位置
+	defaultPos := ChunkPosition{
+		StartLine: 1,
+		EndLine:   1,
+		StartCol:  1,
+		EndCol:    1,
+	}
+
+	// 检查节点是否有Lines信息
+	if node.Lines().Len() == 0 {
+		return defaultPos
+	}
+
+	// 将源码按行分割来计算行号
+	lines := strings.Split(string(c.source), "\n")
+
+	// 获取节点的字节位置
+	segment := node.Lines().At(0)
+	startByte := segment.Start
+	endByte := segment.Stop
+
+	// 如果节点有多行，获取最后一行的结束位置
+	if node.Lines().Len() > 1 {
+		lastSegment := node.Lines().At(node.Lines().Len() - 1)
+		endByte = lastSegment.Stop
+	}
+
+	// 计算起始行号和列号
+	startLine := 1
+	startCol := 1
+	currentByte := 0
+
+	for lineNum, line := range lines {
+		lineLength := len(line) + 1 // +1 for newline character
+		if currentByte+lineLength > startByte {
+			startLine = lineNum + 1
+			startCol = startByte - currentByte + 1
+			break
+		}
+		currentByte += lineLength
+	}
+
+	// 计算结束行号和列号
+	endLine := startLine
+	endCol := startCol
+	currentByte = 0
+
+	for lineNum, line := range lines {
+		lineLength := len(line) + 1 // +1 for newline character
+		if currentByte+lineLength > endByte {
+			endLine = lineNum + 1
+			endCol = endByte - currentByte + 1
+			break
+		}
+		currentByte += lineLength
+	}
+
+	return ChunkPosition{
+		StartLine: startLine,
+		EndLine:   endLine,
+		StartCol:  startCol,
+		EndCol:    endCol,
+	}
+}
+
+// extractLinks 从节点中提取链接信息
+func (c *MarkdownChunker) extractLinks(node ast.Node) []Link {
+	links := make([]Link, 0) // 初始化为空切片而不是nil
+
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering {
+			switch link := n.(type) {
+			case *ast.Link:
+				linkText := c.getNodeText(link)
+				linkURL := string(link.Destination)
+				linkType := c.determineLinkType(linkURL)
+
+				links = append(links, Link{
+					Text: linkText,
+					URL:  linkURL,
+					Type: linkType,
+				})
+			case *ast.AutoLink:
+				linkURL := string(link.URL(c.source))
+				linkType := c.determineLinkType(linkURL)
+
+				links = append(links, Link{
+					Text: linkURL,
+					URL:  linkURL,
+					Type: linkType,
+				})
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+
+	return links
+}
+
+// extractImages 从节点中提取图片信息
+func (c *MarkdownChunker) extractImages(node ast.Node) []Image {
+	images := make([]Image, 0) // 初始化为空切片而不是nil
+
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering {
+			if img, ok := n.(*ast.Image); ok {
+				// 直接从子节点提取alt文本，避免包含title
+				alt := ""
+				for child := img.FirstChild(); child != nil; child = child.NextSibling() {
+					if textNode, ok := child.(*ast.Text); ok {
+						alt += string(textNode.Segment.Value(c.source))
+					}
+				}
+
+				url := string(img.Destination)
+				title := ""
+				if img.Title != nil {
+					title = string(img.Title)
+				}
+
+				images = append(images, Image{
+					Alt:    alt,
+					URL:    url,
+					Title:  title,
+					Width:  "", // 这些属性在标准markdown中不可用，可以通过扩展获取
+					Height: "",
+				})
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+
+	return images
+}
+
+// determineLinkType 确定链接类型
+func (c *MarkdownChunker) determineLinkType(url string) string {
+	if strings.HasPrefix(url, "#") {
+		return "anchor"
+	}
+	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+		return "external"
+	}
+	if strings.HasPrefix(url, "mailto:") {
+		return "external"
+	}
+	return "internal"
 }
