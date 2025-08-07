@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	mc "github.com/kydenul/markdown-chunker"
 )
@@ -131,6 +132,237 @@ func main() {
 			fmt.Printf("  错误 %d: %s\n", i+1, err.Type.String())
 		}
 	}
+
+	// 示例 6: 配置验证错误
+	fmt.Println("\n6. 配置验证错误")
+	demonstrateConfigValidation()
+
+	// 示例 7: 解析错误处理
+	fmt.Println("\n7. 解析错误处理")
+	demonstrateParsingErrors()
+
+	// 示例 8: 错误恢复机制
+	fmt.Println("\n8. 错误恢复机制")
+	demonstrateErrorRecovery()
+
+	// 示例 9: 自定义错误处理器
+	fmt.Println("\n9. 自定义错误处理器")
+	demonstrateCustomErrorHandler()
+}
+
+// demonstrateConfigValidation 演示配置验证错误
+func demonstrateConfigValidation() {
+	// 创建无效配置
+	invalidConfig := &mc.ChunkerConfig{
+		MaxChunkSize: -100, // 无效的负数
+		EnabledTypes: map[string]bool{
+			"invalid_type": true, // 无效的内容类型
+		},
+		ErrorHandling:   mc.ErrorModeStrict,
+		PerformanceMode: mc.PerformanceModeDefault,
+	}
+
+	// 验证配置
+	err := mc.ValidateConfig(invalidConfig)
+	if err != nil {
+		fmt.Printf("配置验证失败: %s\n", err.Error())
+	}
+
+	// 使用无效配置创建分块器（会自动使用默认配置）
+	chunker := mc.NewMarkdownChunkerWithConfig(invalidConfig)
+	testContent := "# 测试标题\n\n这是一个测试段落。"
+	chunks, err := chunker.ChunkDocument([]byte(testContent))
+
+	fmt.Printf("使用无效配置的结果:\n")
+	fmt.Printf("  返回错误: %v\n", err)
+	fmt.Printf("  块数量: %d\n", len(chunks))
+	fmt.Printf("  (注意: 无效配置会被替换为默认配置)\n")
+}
+
+// demonstrateParsingErrors 演示解析错误处理
+func demonstrateParsingErrors() {
+	// 创建格式不规范的表格，可能导致解析问题
+	malformedMarkdown := `# 测试文档
+
+| 表头1 | 表头2 |
+|-------|-------|
+| 数据1 | 数据2 | 多余列 |
+| 数据3 |  // 缺少列
+
+` + "```invalid_language" + `
+这是一个可能有问题的代码块
+` + "```" + `
+
+> 引用块
+>> 嵌套引用
+>>> 深度嵌套引用`
+
+	config := mc.DefaultConfig()
+	config.ErrorHandling = mc.ErrorModePermissive
+
+	chunker := mc.NewMarkdownChunkerWithConfig(config)
+	chunks, err := chunker.ChunkDocument([]byte(malformedMarkdown))
+
+	fmt.Printf("解析格式不规范内容的结果:\n")
+	fmt.Printf("  返回错误: %v\n", err)
+	fmt.Printf("  块数量: %d\n", len(chunks))
+	fmt.Printf("  处理错误数量: %d\n", len(chunker.GetErrors()))
+
+	// 显示解析错误详情
+	if chunker.HasErrors() {
+		parsingErrors := chunker.GetErrorsByType(mc.ErrorTypeParsingFailed)
+		fmt.Printf("  解析错误: %d\n", len(parsingErrors))
+		for i, err := range parsingErrors {
+			fmt.Printf("    错误 %d: %s\n", i+1, err.Message)
+			if len(err.Context) > 0 {
+				fmt.Printf("      上下文: %+v\n", err.Context)
+			}
+		}
+	}
+}
+
+// demonstrateErrorRecovery 演示错误恢复机制
+func demonstrateErrorRecovery() {
+	// 创建一个会产生多种错误的文档
+	problematicContent := `# 超长标题` + strings.Repeat("这是一个非常长的标题", 20) + `
+
+这是一个正常段落。
+
+` + "```go" + `
+func normalFunction() {
+    fmt.Println("这是正常代码")
+}
+` + "```" + `
+
+另一个超长段落` + strings.Repeat("内容", 100) + `
+
+| 正常表格 | 列2 |
+|----------|-----|
+| 数据1    | 数据2 |
+
+最后一个正常段落。`
+
+	config := mc.DefaultConfig()
+	config.MaxChunkSize = 50                      // 很小的限制，会导致多个错误
+	config.ErrorHandling = mc.ErrorModePermissive // 宽松模式，继续处理
+
+	chunker := mc.NewMarkdownChunkerWithConfig(config)
+	chunks, err := chunker.ChunkDocument([]byte(problematicContent))
+
+	fmt.Printf("错误恢复机制测试:\n")
+	fmt.Printf("  返回错误: %v\n", err)
+	fmt.Printf("  成功处理的块: %d\n", len(chunks))
+	fmt.Printf("  总错误数: %d\n", len(chunker.GetErrors()))
+
+	// 按类型统计错误
+	errorTypes := make(map[mc.ErrorType]int)
+	for _, err := range chunker.GetErrors() {
+		errorTypes[err.Type]++
+	}
+
+	fmt.Printf("  错误类型分布:\n")
+	for errorType, count := range errorTypes {
+		fmt.Printf("    %s: %d\n", errorType.String(), count)
+	}
+
+	// 显示成功处理的块类型
+	blockTypes := make(map[string]int)
+	for _, chunk := range chunks {
+		blockTypes[chunk.Type]++
+	}
+
+	fmt.Printf("  成功处理的块类型:\n")
+	for blockType, count := range blockTypes {
+		fmt.Printf("    %s: %d\n", blockType, count)
+	}
+}
+
+// CustomErrorHandler 自定义错误处理器示例
+type CustomErrorHandler struct {
+	errors    []mc.ChunkerError
+	maxErrors int
+	callback  func(*mc.ChunkerError)
+}
+
+// NewCustomErrorHandler 创建自定义错误处理器
+func NewCustomErrorHandler(maxErrors int, callback func(*mc.ChunkerError)) *CustomErrorHandler {
+	return &CustomErrorHandler{
+		errors:    make([]mc.ChunkerError, 0),
+		maxErrors: maxErrors,
+		callback:  callback,
+	}
+}
+
+// HandleError 处理错误
+func (h *CustomErrorHandler) HandleError(err *mc.ChunkerError) error {
+	// 记录错误
+	h.errors = append(h.errors, *err)
+
+	// 调用回调函数
+	if h.callback != nil {
+		h.callback(err)
+	}
+
+	// 如果错误数量超过限制，返回错误
+	if len(h.errors) >= h.maxErrors {
+		return fmt.Errorf("错误数量超过限制 (%d)", h.maxErrors)
+	}
+
+	return nil
+}
+
+// GetErrors 获取所有错误
+func (h *CustomErrorHandler) GetErrors() []*mc.ChunkerError {
+	errors := make([]*mc.ChunkerError, len(h.errors))
+	for i := range h.errors {
+		errors[i] = &h.errors[i]
+	}
+	return errors
+}
+
+// ClearErrors 清除所有错误
+func (h *CustomErrorHandler) ClearErrors() {
+	h.errors = h.errors[:0]
+}
+
+// HasErrors 检查是否有错误
+func (h *CustomErrorHandler) HasErrors() bool {
+	return len(h.errors) > 0
+}
+
+// demonstrateCustomErrorHandler 演示自定义错误处理器
+func demonstrateCustomErrorHandler() {
+	// 创建自定义错误处理器
+	errorCallback := func(err *mc.ChunkerError) {
+		fmt.Printf("    [回调] 捕获错误: %s - %s\n", err.Type.String(), err.Message)
+	}
+
+	customHandler := NewCustomErrorHandler(3, errorCallback) // 最多允许3个错误
+
+	// 注意: 这里我们无法直接设置自定义错误处理器，因为当前API不支持
+	// 这个示例展示了如何实现自定义错误处理器的概念
+	fmt.Printf("自定义错误处理器示例:\n")
+	fmt.Printf("  最大错误数: %d\n", customHandler.maxErrors)
+	fmt.Printf("  当前错误数: %d\n", len(customHandler.GetErrors()))
+
+	// 模拟错误处理
+	testErrors := []*mc.ChunkerError{
+		mc.NewChunkerError(mc.ErrorTypeChunkTooLarge, "块过大", nil),
+		mc.NewChunkerError(mc.ErrorTypeParsingFailed, "解析失败", nil),
+		mc.NewChunkerError(mc.ErrorTypeInvalidInput, "输入无效", nil),
+		mc.NewChunkerError(mc.ErrorTypeMemoryExhausted, "内存不足", nil),
+	}
+
+	fmt.Printf("  模拟处理错误:\n")
+	for i, err := range testErrors {
+		handlerErr := customHandler.HandleError(err)
+		if handlerErr != nil {
+			fmt.Printf("    处理错误 %d 时失败: %s\n", i+1, handlerErr.Error())
+			break
+		}
+	}
+
+	fmt.Printf("  最终错误数: %d\n", len(customHandler.GetErrors()))
 }
 
 func min(a, b int) int {
