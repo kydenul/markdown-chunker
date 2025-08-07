@@ -364,6 +364,8 @@ func (c *MarkdownChunker) processHeading(heading *ast.Heading, id int) *Chunk {
 		Level:   heading.Level,
 		Metadata: map[string]string{
 			"heading_level": fmt.Sprintf("%d", heading.Level),
+			"level":         fmt.Sprintf("%d", heading.Level), // 为了兼容性
+			"word_count":    fmt.Sprintf("%d", len(strings.Fields(text))),
 		},
 	}
 }
@@ -386,6 +388,7 @@ func (c *MarkdownChunker) processParagraph(para *ast.Paragraph, id int) *Chunk {
 		Level:   0,
 		Metadata: map[string]string{
 			"word_count": fmt.Sprintf("%d", len(strings.Fields(text))),
+			"char_count": fmt.Sprintf("%d", len(text)),
 		},
 	}
 }
@@ -674,20 +677,52 @@ func (c *MarkdownChunker) reconstructList(list *ast.List) string {
 func (c *MarkdownChunker) reconstructBlockquote(quote *ast.Blockquote) string {
 	var buf bytes.Buffer
 
-	// 遍历blockquote的子节点（通常是段落）
+	// 遍历blockquote的子节点
 	for child := quote.FirstChild(); child != nil; child = child.NextSibling() {
-		if para, ok := child.(*ast.Paragraph); ok {
-			// 从段落的每一行重构blockquote
-			for i := 0; i < para.Lines().Len(); i++ {
-				line := para.Lines().At(i)
+		switch n := child.(type) {
+		case *ast.Paragraph:
+			// 处理段落
+			for i := 0; i < n.Lines().Len(); i++ {
+				line := n.Lines().At(i)
 				buf.WriteString("> ")
 				// 去除行尾的换行符，因为我们会自己添加
 				lineContent := strings.TrimRight(string(line.Value(c.source)), "\n")
 				buf.WriteString(lineContent)
-				if i < para.Lines().Len()-1 {
+				if i < n.Lines().Len()-1 {
 					buf.WriteByte('\n')
 				}
 			}
+		case *ast.Blockquote:
+			// 处理嵌套的引用块
+			nestedContent := c.reconstructBlockquote(n)
+			lines := strings.Split(nestedContent, "\n")
+			for i, line := range lines {
+				if line != "" {
+					buf.WriteString("> ")
+					buf.WriteString(line)
+					if i < len(lines)-1 {
+						buf.WriteByte('\n')
+					}
+				}
+			}
+		default:
+			// 处理其他类型的子节点
+			if child.Lines().Len() > 0 {
+				for i := 0; i < child.Lines().Len(); i++ {
+					line := child.Lines().At(i)
+					buf.WriteString("> ")
+					lineContent := strings.TrimRight(string(line.Value(c.source)), "\n")
+					buf.WriteString(lineContent)
+					if i < child.Lines().Len()-1 {
+						buf.WriteByte('\n')
+					}
+				}
+			}
+		}
+
+		// 在子节点之间添加换行
+		if child.NextSibling() != nil {
+			buf.WriteByte('\n')
 		}
 	}
 

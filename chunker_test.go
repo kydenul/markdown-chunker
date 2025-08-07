@@ -52,6 +52,8 @@ func TestChunkDocument_Headings(t *testing.T) {
 					Level:   1,
 					Metadata: map[string]string{
 						"heading_level": "1",
+						"level":         "1",
+						"word_count":    "2",
 					},
 				},
 			},
@@ -68,6 +70,8 @@ func TestChunkDocument_Headings(t *testing.T) {
 					Level:   1,
 					Metadata: map[string]string{
 						"heading_level": "1",
+						"level":         "1",
+						"word_count":    "1",
 					},
 				},
 				{
@@ -78,6 +82,8 @@ func TestChunkDocument_Headings(t *testing.T) {
 					Level:   2,
 					Metadata: map[string]string{
 						"heading_level": "2",
+						"level":         "2",
+						"word_count":    "1",
 					},
 				},
 				{
@@ -88,6 +94,8 @@ func TestChunkDocument_Headings(t *testing.T) {
 					Level:   3,
 					Metadata: map[string]string{
 						"heading_level": "3",
+						"level":         "3",
+						"word_count":    "1",
 					},
 				},
 			},
@@ -126,6 +134,7 @@ func TestChunkDocument_Paragraphs(t *testing.T) {
 					Level:   0,
 					Metadata: map[string]string{
 						"word_count": "5",
+						"char_count": "27",
 					},
 				},
 			},
@@ -142,6 +151,7 @@ func TestChunkDocument_Paragraphs(t *testing.T) {
 					Level:   0,
 					Metadata: map[string]string{
 						"word_count": "2",
+						"char_count": "16",
 					},
 				},
 				{
@@ -152,6 +162,7 @@ func TestChunkDocument_Paragraphs(t *testing.T) {
 					Level:   0,
 					Metadata: map[string]string{
 						"word_count": "5",
+						"char_count": "33",
 					},
 				},
 			},
