@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -583,20 +584,20 @@ func TestErrorHandlerStateManagement(t *testing.T) {
 	t.Run("error handler thread safety", func(t *testing.T) {
 		handler := NewDefaultErrorHandler(ErrorModePermissive)
 
-		// 并发添加错误
-		done := make(chan bool, 10)
+		// 使用 WaitGroup 确保所有 goroutine 完成
+		var wg sync.WaitGroup
+		wg.Add(10)
+
 		for i := 0; i < 10; i++ {
 			go func(id int) {
+				defer wg.Done()
 				err := NewChunkerError(ErrorTypeInvalidInput, fmt.Sprintf("error %d", id), nil)
 				handler.HandleError(err)
-				done <- true
 			}(i)
 		}
 
 		// 等待所有goroutine完成
-		for i := 0; i < 10; i++ {
-			<-done
-		}
+		wg.Wait()
 
 		// 检查所有错误都被记录
 		if handler.GetErrorCount() != 10 {

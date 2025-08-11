@@ -2,6 +2,7 @@ package markdownchunker
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -98,6 +99,7 @@ type ErrorHandler interface {
 type DefaultErrorHandler struct {
 	errors []ChunkerError
 	mode   ErrorHandlingMode
+	mutex  sync.RWMutex
 }
 
 // NewDefaultErrorHandler 创建默认错误处理器
@@ -110,8 +112,10 @@ func NewDefaultErrorHandler(mode ErrorHandlingMode) *DefaultErrorHandler {
 
 // HandleError 处理错误
 func (h *DefaultErrorHandler) HandleError(err *ChunkerError) error {
-	// 记录错误
+	// 记录错误 (线程安全)
+	h.mutex.Lock()
 	h.errors = append(h.errors, *err)
+	h.mutex.Unlock()
 
 	switch h.mode {
 	case ErrorModeStrict:
@@ -130,6 +134,9 @@ func (h *DefaultErrorHandler) HandleError(err *ChunkerError) error {
 
 // GetErrors 获取所有错误
 func (h *DefaultErrorHandler) GetErrors() []*ChunkerError {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+
 	errors := make([]*ChunkerError, len(h.errors))
 	for i := range h.errors {
 		errors[i] = &h.errors[i]
@@ -139,16 +146,23 @@ func (h *DefaultErrorHandler) GetErrors() []*ChunkerError {
 
 // ClearErrors 清除所有错误
 func (h *DefaultErrorHandler) ClearErrors() {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
 	h.errors = h.errors[:0]
 }
 
 // HasErrors 检查是否有错误
 func (h *DefaultErrorHandler) HasErrors() bool {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
 	return len(h.errors) > 0
 }
 
 // GetErrorsByType 按类型获取错误
 func (h *DefaultErrorHandler) GetErrorsByType(errorType ErrorType) []*ChunkerError {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+
 	var filtered []*ChunkerError
 	for i := range h.errors {
 		if h.errors[i].Type == errorType {
@@ -160,11 +174,16 @@ func (h *DefaultErrorHandler) GetErrorsByType(errorType ErrorType) []*ChunkerErr
 
 // GetErrorCount 获取错误数量
 func (h *DefaultErrorHandler) GetErrorCount() int {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
 	return len(h.errors)
 }
 
 // GetErrorCountByType 按类型获取错误数量
 func (h *DefaultErrorHandler) GetErrorCountByType(errorType ErrorType) int {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+
 	count := 0
 	for _, err := range h.errors {
 		if err.Type == errorType {
