@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kydenul/log"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
@@ -118,6 +119,12 @@ type ChunkerConfig struct {
 
 	// EnableObjectPooling 是否启用对象池化
 	EnableObjectPooling bool
+
+	// 日志配置
+	LogLevel     string `json:"log_level"`     // DEBUG, INFO, WARN, ERROR
+	EnableLog    bool   `json:"enable_log"`    // 是否启用日志
+	LogFormat    string `json:"log_format"`    // 日志格式 (json, console)
+	LogDirectory string `json:"log_directory"` // 日志文件目录
 }
 
 // MarkdownChunker Markdown 分块器
@@ -130,6 +137,7 @@ type MarkdownChunker struct {
 	stringOps          *OptimizedStringOperations
 	chunks             []Chunk
 	source             []byte
+	logger             log.Logger // 日志器实例
 }
 
 // DefaultConfig 返回默认配置
@@ -142,7 +150,60 @@ func DefaultConfig() *ChunkerConfig {
 		PerformanceMode:    PerformanceModeDefault,
 		FilterEmptyChunks:  true,
 		PreserveWhitespace: false,
+		LogLevel:           "INFO",
+		EnableLog:          true,
+		LogFormat:          "console",
+		LogDirectory:       "./logs", // 默认日志目录
 	}
+}
+
+// parseLogLevel 解析日志级别字符串为 kydenul/log 支持的级别
+func parseLogLevel(level string) string {
+	switch strings.ToUpper(level) {
+	case "DEBUG":
+		return "debug"
+	case "INFO":
+		return "info"
+	case "WARN", "WARNING":
+		return "warn"
+	case "ERROR":
+		return "error"
+	default:
+		return "info" // 默认为info级别
+	}
+}
+
+// validateLogConfig 验证日志配置的有效性
+func validateLogConfig(config *ChunkerConfig) error {
+	if config == nil {
+		return fmt.Errorf("config cannot be nil")
+	}
+
+	// 验证日志级别
+	validLevels := map[string]bool{
+		"DEBUG": true, "INFO": true, "WARN": true, "WARNING": true, "ERROR": true,
+	}
+	if config.LogLevel != "" && !validLevels[strings.ToUpper(config.LogLevel)] {
+		return fmt.Errorf("invalid log level: %s, must be one of DEBUG, INFO, WARN, ERROR", config.LogLevel)
+	}
+
+	// 验证日志格式
+	validFormats := map[string]bool{
+		"json": true, "console": true,
+	}
+	if config.LogFormat != "" && !validFormats[strings.ToLower(config.LogFormat)] {
+		return fmt.Errorf("invalid log format: %s, must be one of json, console", config.LogFormat)
+	}
+
+	// 验证日志目录（如果为空，将使用默认值）
+	if config.LogDirectory != "" {
+		// 这里可以添加更多的目录验证逻辑，比如检查目录是否可写，但为了保持简单，只检查不为空
+		if strings.TrimSpace(config.LogDirectory) == "" {
+			return fmt.Errorf("log directory cannot be empty or whitespace only")
+		}
+	}
+
+	return nil
 }
 
 // ValidateConfig 验证配置的有效性
@@ -168,6 +229,11 @@ func ValidateConfig(config *ChunkerConfig) error {
 				return fmt.Errorf("invalid content type: %s", typeName)
 			}
 		}
+	}
+
+	// 验证日志配置
+	if err := validateLogConfig(config); err != nil {
+		return err
 	}
 
 	return nil
@@ -213,20 +279,67 @@ func NewMarkdownChunkerWithConfig(config *ChunkerConfig) *MarkdownChunker {
 		),
 	)
 
+	// 初始化日志器
+	// 设置默认格式如果为空
+	logFormat := strings.ToLower(config.LogFormat)
+	if logFormat == "" {
+		logFormat = "console"
+	}
+
+	// 设置默认日志目录如果为空
+	logDirectory := config.LogDirectory
+	if logDirectory == "" {
+		logDirectory = "./logs"
+	}
+
+	opts := &log.Options{
+		Level:      parseLogLevel(config.LogLevel),
+		Format:     logFormat,
+		Directory:  logDirectory,              // 使用配置中的日志目录
+		TimeLayout: "2006-01-02 15:04:05.000", // 设置时间格式
+		MaxSize:    100,                       // 设置最大文件大小 (MB)
+		MaxBackups: 3,                         // 设置最大备份文件数
+	}
+
+	if !config.EnableLog {
+		opts.Level = "error" // 只记录错误
+	}
+
+	logger := log.NewLogger(opts)
+
 	return &MarkdownChunker{
 		md:                 md,
 		config:             config,
 		errorHandler:       NewDefaultErrorHandler(config.ErrorHandling),
 		performanceMonitor: NewPerformanceMonitor(),
 		chunks:             []Chunk{},
+		logger:             logger,
 	}
 }
 
 // ChunkDocument 对整个文档进行分块
 func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
+	// 记录文档处理开始日志
+	c.logger.Infow("开始处理 Markdown 文档",
+		"document_size_bytes", len(content),
+		"function", "ChunkDocument")
+
 	// 开始性能监控
 	c.performanceMonitor.Start()
-	defer c.performanceMonitor.Stop()
+	defer func() {
+		c.performanceMonitor.Stop()
+
+		// 获取性能统计信息
+		stats := c.performanceMonitor.GetStats()
+
+		// 记录文档处理结束日志，包含性能信息
+		c.logger.Infow("完成 Markdown 文档处理",
+			"chunk_count", len(c.chunks),
+			"document_size_bytes", len(content),
+			"processing_time_ms", stats.ProcessingTime.Milliseconds(),
+			"memory_used_bytes", stats.MemoryUsed,
+			"function", "ChunkDocument")
+	}()
 
 	// 记录输入文档大小
 	c.performanceMonitor.RecordBytes(int64(len(content)))
@@ -236,6 +349,10 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 
 	// 输入验证
 	if content == nil {
+		c.logger.Errorw("输入内容为空",
+			"error", "content cannot be nil",
+			"function", "ChunkDocument")
+
 		err := NewChunkerError(ErrorTypeInvalidInput, "content cannot be nil", nil)
 		if handlerErr := c.errorHandler.HandleError(err); handlerErr != nil {
 			return nil, handlerErr
@@ -243,8 +360,20 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 		return []Chunk{}, nil
 	}
 
+	// 记录空文档处理
+	if len(content) == 0 {
+		c.logger.Infow("处理空文档",
+			"function", "ChunkDocument")
+		return []Chunk{}, nil
+	}
+
 	// 检查内容大小
 	if len(content) > 100*1024*1024 { // 100MB 限制
+		c.logger.Errorw("文档大小超过限制",
+			"document_size_bytes", len(content),
+			"size_limit_bytes", 100*1024*1024,
+			"function", "ChunkDocument")
+
 		err := NewChunkerError(ErrorTypeMemoryExhausted, "content too large", nil).
 			WithContext("size", len(content)).
 			WithContext("limit", 100*1024*1024)
@@ -253,30 +382,65 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 		}
 	}
 
+	// 记录大型文档处理警告
+	if len(content) > 10*1024*1024 { // 10MB 警告阈值
+		c.logger.Warnw("处理大型文档",
+			"document_size_bytes", len(content),
+			"recommendation", "考虑分批处理以优化性能",
+			"function", "ChunkDocument")
+	}
+
 	c.source = content
 	c.chunks = []Chunk{}
 
 	// 解析 Markdown
+	c.logger.Debugw("开始解析 Markdown AST",
+		"function", "ChunkDocument")
+
 	reader := text.NewReader(content)
 	doc := c.md.Parser().Parse(reader)
 
+	c.logger.Debugw("Markdown AST 解析完成",
+		"function", "ChunkDocument")
+
 	// 遍历顶层节点进行分块
+	c.logger.Debugw("开始遍历 AST 节点进行分块",
+		"function", "ChunkDocument")
+
 	chunkID := 0
+	processedNodes := 0
+
 	for child := doc.FirstChild(); child != nil; child = child.NextSibling() {
+		processedNodes++
 		chunk := c.processNode(child, chunkID)
 		if chunk != nil {
 			// 检查类型是否启用
 			if !c.isTypeEnabled(chunk.Type) {
+				c.logger.Debugw("跳过未启用的块类型",
+					"chunk_type", chunk.Type,
+					"chunk_id", chunkID,
+					"function", "ChunkDocument")
 				continue
 			}
 
 			// 检查是否过滤空块
 			if c.config.FilterEmptyChunks && strings.TrimSpace(chunk.Text) == "" {
+				c.logger.Debugw("过滤空块",
+					"chunk_type", chunk.Type,
+					"chunk_id", chunkID,
+					"function", "ChunkDocument")
 				continue
 			}
 
 			// 检查块大小限制
 			if c.config.MaxChunkSize > 0 && len(chunk.Content) > c.config.MaxChunkSize {
+				c.logger.Warnw("块大小超过限制",
+					"chunk_size", len(chunk.Content),
+					"max_size", c.config.MaxChunkSize,
+					"chunk_type", chunk.Type,
+					"chunk_id", chunk.ID,
+					"function", "ChunkDocument")
+
 				err := NewChunkerError(ErrorTypeChunkTooLarge, "chunk size exceeds maximum", nil).
 					WithContext("chunk_size", len(chunk.Content)).
 					WithContext("max_size", c.config.MaxChunkSize).
@@ -289,6 +453,13 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 
 				// 在宽松模式下截断内容
 				if c.config.ErrorHandling != ErrorModeStrict {
+					c.logger.Infow("截断超大块内容",
+						"original_size", len(chunk.Content),
+						"truncated_size", c.config.MaxChunkSize,
+						"chunk_type", chunk.Type,
+						"chunk_id", chunk.ID,
+						"function", "ChunkDocument")
+
 					chunk.Content = chunk.Content[:c.config.MaxChunkSize]
 					chunk.Text = chunk.Text[:min(len(chunk.Text), c.config.MaxChunkSize)]
 				}
@@ -307,9 +478,30 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 			// 记录处理的块
 			c.performanceMonitor.RecordChunk(chunk)
 
+			// 记录成功处理的块
+			c.logger.Debugw("成功处理块",
+				"chunk_type", chunk.Type,
+				"chunk_id", chunk.ID,
+				"content_size", len(chunk.Content),
+				"text_size", len(chunk.Text),
+				"function", "ChunkDocument")
+
 			chunkID++
 		}
+
+		// 每处理100个节点记录一次进度（用于大型文档）
+		if processedNodes%100 == 0 && len(content) > 1024*1024 { // 只对大于1MB的文档记录进度
+			c.logger.Infow("文档处理进度",
+				"processed_nodes", processedNodes,
+				"generated_chunks", len(c.chunks),
+				"function", "ChunkDocument")
+		}
 	}
+
+	c.logger.Debugw("完成 AST 节点遍历",
+		"total_processed_nodes", processedNodes,
+		"generated_chunks", len(c.chunks),
+		"function", "ChunkDocument")
 
 	return c.chunks, nil
 }
