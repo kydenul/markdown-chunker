@@ -343,12 +343,31 @@ func parseLogLevel(level string) string {
 
 // validateLogConfig 验证日志配置的有效性
 func validateLogConfig(config *ChunkerConfig) error {
+	// 创建临时日志器用于日志配置验证过程的日志记录
+	tempLogger := log.NewLogger(&log.Options{
+		Level:      "debug",
+		Format:     "console",
+		Directory:  "./logs",
+		TimeLayout: "2006-01-02 15:04:05.000",
+	})
+
+	tempLogger.Debugw("开始日志配置验证",
+		"function", "validateLogConfig")
+
 	if config == nil {
+		tempLogger.Errorw("日志配置验证失败：配置对象为空",
+			"function", "validateLogConfig",
+			"error_type", "config_null")
+
 		return NewChunkerError(ErrorTypeConfigInvalid, "配置对象不能为空", nil).
 			WithContext("function", "validateLogConfig")
 	}
 
 	// 验证日志级别
+	tempLogger.Debugw("验证日志级别配置",
+		"function", "validateLogConfig",
+		"log_level", config.LogLevel)
+
 	validLevels := map[string]bool{
 		"DEBUG": true, "INFO": true, "WARN": true, "WARNING": true, "ERROR": true,
 	}
@@ -358,7 +377,14 @@ func validateLogConfig(config *ChunkerConfig) error {
 			validLevelsList = append(validLevelsList, level)
 		}
 
-		return NewChunkerError(ErrorTypeConfigInvalid, "无效的日志级别配置", nil).
+		tempLogger.Errorw("日志配置验证失败：无效的日志级别",
+			"function", "validateLogConfig",
+			"field", "LogLevel",
+			"invalid_level", config.LogLevel,
+			"valid_levels", validLevelsList,
+			"error_type", "invalid_log_level")
+
+		return NewChunkerError(ErrorTypeConfigInvalid, "invalid log level configuration", nil).
 			WithContext("function", "validateLogConfig").
 			WithContext("field", "LogLevel").
 			WithContext("invalid_level", config.LogLevel).
@@ -367,6 +393,10 @@ func validateLogConfig(config *ChunkerConfig) error {
 	}
 
 	// 验证日志格式
+	tempLogger.Debugw("验证日志格式配置",
+		"function", "validateLogConfig",
+		"log_format", config.LogFormat)
+
 	validFormats := map[string]bool{
 		"json": true, "console": true,
 	}
@@ -375,6 +405,13 @@ func validateLogConfig(config *ChunkerConfig) error {
 		for format := range validFormats {
 			validFormatsList = append(validFormatsList, format)
 		}
+
+		tempLogger.Errorw("日志配置验证失败：无效的日志格式",
+			"function", "validateLogConfig",
+			"field", "LogFormat",
+			"invalid_format", config.LogFormat,
+			"valid_formats", validFormatsList,
+			"error_type", "invalid_log_format")
 
 		return NewChunkerError(ErrorTypeConfigInvalid, "无效的日志格式配置", nil).
 			WithContext("function", "validateLogConfig").
@@ -385,8 +422,18 @@ func validateLogConfig(config *ChunkerConfig) error {
 	}
 
 	// 验证日志目录（如果为空，将使用默认值）
+	tempLogger.Debugw("验证日志目录配置",
+		"function", "validateLogConfig",
+		"log_directory", config.LogDirectory)
+
 	if config.LogDirectory != "" {
 		if strings.TrimSpace(config.LogDirectory) == "" {
+			tempLogger.Errorw("日志配置验证失败：日志目录为空白字符",
+				"function", "validateLogConfig",
+				"field", "LogDirectory",
+				"value", config.LogDirectory,
+				"error_type", "invalid_log_directory")
+
 			return NewChunkerError(ErrorTypeConfigInvalid, "日志目录不能为空白字符", nil).
 				WithContext("function", "validateLogConfig").
 				WithContext("field", "LogDirectory").
@@ -395,19 +442,70 @@ func validateLogConfig(config *ChunkerConfig) error {
 		}
 	}
 
+	// 记录日志配置验证成功
+	tempLogger.Debugw("日志配置验证成功",
+		"function", "validateLogConfig",
+		"log_level", config.LogLevel,
+		"enable_log", config.EnableLog,
+		"log_format", config.LogFormat,
+		"log_directory", config.LogDirectory,
+		"validation_result", "passed")
+
 	return nil
 }
 
 // ValidateConfig 验证配置的有效性
 func ValidateConfig(config *ChunkerConfig) error {
+	// 创建临时日志器用于配置验证日志记录
+	tempLogger := log.NewLogger(&log.Options{
+		Level:      "info",
+		Format:     "console",
+		Directory:  "./logs",
+		TimeLayout: "2006-01-02 15:04:05.000",
+	})
+
+	// 记录配置验证开始日志
+	tempLogger.Infow("开始配置验证",
+		"function", "ValidateConfig")
+
 	if config == nil {
+		tempLogger.Errorw("配置验证失败：配置对象为空",
+			"function", "ValidateConfig",
+			"error_type", "config_null",
+			"expected", "non-nil ChunkerConfig",
+			"actual", "nil")
+
 		return NewChunkerError(ErrorTypeConfigInvalid, "配置对象不能为空", nil).
 			WithContext("function", "ValidateConfig").
 			WithContext("expected", "non-nil ChunkerConfig").
 			WithContext("actual", "nil")
 	}
 
+	// 记录开始验证的配置参数
+	tempLogger.Infow("验证配置参数",
+		"function", "ValidateConfig",
+		"max_chunk_size", config.MaxChunkSize,
+		"enabled_types_count", len(config.EnabledTypes),
+		"memory_limit_bytes", config.MemoryLimit,
+		"memory_limit_mb", config.MemoryLimit/(1024*1024),
+		"log_level", config.LogLevel,
+		"enable_log", config.EnableLog,
+		"log_format", config.LogFormat,
+		"log_directory", config.LogDirectory,
+		"error_handling_mode", config.ErrorHandling,
+		"performance_mode", config.PerformanceMode,
+		"filter_empty_chunks", config.FilterEmptyChunks,
+		"preserve_whitespace", config.PreserveWhitespace,
+		"enable_object_pooling", config.EnableObjectPooling)
+
 	if config.MaxChunkSize < 0 {
+		tempLogger.Errorw("配置验证失败：最大块大小无效",
+			"function", "ValidateConfig",
+			"field", "MaxChunkSize",
+			"value", config.MaxChunkSize,
+			"minimum_allowed", 0,
+			"error_type", "invalid_chunk_size")
+
 		return NewChunkerError(ErrorTypeConfigInvalid, "最大块大小不能为负数", nil).
 			WithContext("function", "ValidateConfig").
 			WithContext("field", "MaxChunkSize").
@@ -417,6 +515,10 @@ func ValidateConfig(config *ChunkerConfig) error {
 
 	// 验证启用的类型
 	if config.EnabledTypes != nil {
+		tempLogger.Debugw("验证启用的内容类型",
+			"function", "ValidateConfig",
+			"enabled_types_count", len(config.EnabledTypes))
+
 		validTypes := map[string]bool{
 			"heading": true, "paragraph": true, "code": true,
 			"table": true, "list": true, "blockquote": true,
@@ -430,6 +532,13 @@ func ValidateConfig(config *ChunkerConfig) error {
 					validTypesList = append(validTypesList, vt)
 				}
 
+				tempLogger.Errorw("配置验证失败：无效的内容类型",
+					"function", "ValidateConfig",
+					"field", "EnabledTypes",
+					"invalid_type", typeName,
+					"valid_types", validTypesList,
+					"error_type", "invalid_content_type")
+
 				return NewChunkerError(ErrorTypeConfigInvalid, "无效的内容类型配置", nil).
 					WithContext("function", "ValidateConfig").
 					WithContext("field", "EnabledTypes").
@@ -438,10 +547,21 @@ func ValidateConfig(config *ChunkerConfig) error {
 					WithContext("recommendation", "请使用有效的内容类型名称")
 			}
 		}
+
+		tempLogger.Debugw("内容类型验证通过",
+			"function", "ValidateConfig",
+			"validated_types", len(config.EnabledTypes))
 	}
 
 	// 验证内存限制
 	if config.MemoryLimit < 0 {
+		tempLogger.Errorw("配置验证失败：内存限制无效",
+			"function", "ValidateConfig",
+			"field", "MemoryLimit",
+			"value", config.MemoryLimit,
+			"minimum_allowed", 0,
+			"error_type", "invalid_memory_limit")
+
 		return NewChunkerError(ErrorTypeConfigInvalid, "内存限制不能为负数", nil).
 			WithContext("function", "ValidateConfig").
 			WithContext("field", "MemoryLimit").
@@ -450,7 +570,20 @@ func ValidateConfig(config *ChunkerConfig) error {
 	}
 
 	// 验证日志配置
+	tempLogger.Debugw("验证日志配置",
+		"function", "ValidateConfig",
+		"log_level", config.LogLevel,
+		"enable_log", config.EnableLog,
+		"log_format", config.LogFormat,
+		"log_directory", config.LogDirectory)
+
 	if err := validateLogConfig(config); err != nil {
+		tempLogger.Errorw("配置验证失败：日志配置无效",
+			"function", "ValidateConfig",
+			"validation_step", "log_config",
+			"error", err.Error(),
+			"error_type", "invalid_log_config")
+
 		if chunkerErr, ok := err.(*ChunkerError); ok {
 			return chunkerErr
 		}
@@ -458,6 +591,16 @@ func ValidateConfig(config *ChunkerConfig) error {
 			WithContext("function", "ValidateConfig").
 			WithContext("validation_step", "log_config")
 	}
+
+	// 记录配置验证成功日志
+	tempLogger.Infow("配置验证成功",
+		"function", "ValidateConfig",
+		"max_chunk_size", config.MaxChunkSize,
+		"memory_limit_mb", config.MemoryLimit/(1024*1024),
+		"log_level", config.LogLevel,
+		"log_format", config.LogFormat,
+		"log_directory", config.LogDirectory,
+		"validation_result", "passed")
 
 	return nil
 }
@@ -542,17 +685,83 @@ func NewMarkdownChunkerWithConfig(config *ChunkerConfig) *MarkdownChunker {
 
 	logger := log.NewLogger(opts)
 
+	// 记录系统初始化开始日志
+	logger.Infow("开始初始化 MarkdownChunker 系统",
+		"function", "NewMarkdownChunkerWithConfig",
+		"initialization_phase", "start")
+
+	// 记录系统信息和配置参数
+	logger.Infow("系统初始化信息",
+		"function", "NewMarkdownChunkerWithConfig",
+		"go_version", runtime.Version(),
+		"go_arch", runtime.GOARCH,
+		"go_os", runtime.GOOS,
+		"num_cpu", runtime.NumCPU(),
+		"max_chunk_size", config.MaxChunkSize,
+		"memory_limit_bytes", config.MemoryLimit,
+		"memory_limit_mb", config.MemoryLimit/(1024*1024),
+		"error_handling_mode", config.ErrorHandling,
+		"performance_mode", config.PerformanceMode,
+		"filter_empty_chunks", config.FilterEmptyChunks,
+		"preserve_whitespace", config.PreserveWhitespace,
+		"enable_object_pooling", config.EnableObjectPooling)
+
+	// 记录日志配置信息
+	logger.Infow("日志系统配置",
+		"function", "NewMarkdownChunkerWithConfig",
+		"log_level", config.LogLevel,
+		"parsed_log_level", parseLogLevel(config.LogLevel),
+		"enable_log", config.EnableLog,
+		"log_format", config.LogFormat,
+		"log_directory", config.LogDirectory,
+		"max_file_size_mb", opts.MaxSize,
+		"max_backups", opts.MaxBackups,
+		"time_layout", opts.TimeLayout)
+
+	// 记录启用的内容类型
+	if config.EnabledTypes != nil {
+		var enabledTypesList []string
+		for typeName, enabled := range config.EnabledTypes {
+			if enabled {
+				enabledTypesList = append(enabledTypesList, typeName)
+			}
+		}
+		logger.Infow("内容类型配置",
+			"function", "NewMarkdownChunkerWithConfig",
+			"enabled_types", enabledTypesList,
+			"enabled_types_count", len(enabledTypesList))
+	} else {
+		logger.Infow("内容类型配置",
+			"function", "NewMarkdownChunkerWithConfig",
+			"enabled_types", "all",
+			"enabled_types_count", "unlimited")
+	}
+
 	// 创建错误处理器并设置日志器
+	logger.Debugw("初始化错误处理器",
+		"function", "NewMarkdownChunkerWithConfig",
+		"error_handling_mode", config.ErrorHandling)
+
 	errorHandler := NewDefaultErrorHandler(config.ErrorHandling)
 	errorHandler.SetLogger(logger)
 
 	// 创建性能监控器并设置日志器
+	logger.Debugw("初始化性能监控器",
+		"function", "NewMarkdownChunkerWithConfig",
+		"performance_mode", config.PerformanceMode)
+
 	performanceMonitor := NewPerformanceMonitor()
 	performanceMonitor.SetLogger(logger)
 
 	// 创建内存优化器并设置日志器（如果启用）
 	var memoryOptimizer *MemoryOptimizer
 	if config.EnableObjectPooling || config.MemoryLimit > 0 {
+		logger.Debugw("初始化内存优化器",
+			"function", "NewMarkdownChunkerWithConfig",
+			"memory_limit_bytes", config.MemoryLimit,
+			"memory_limit_mb", config.MemoryLimit/(1024*1024),
+			"object_pooling_enabled", config.EnableObjectPooling)
+
 		memoryOptimizer = NewMemoryOptimizer(config.MemoryLimit)
 		memoryOptimizer.SetLogger(logger)
 
@@ -561,10 +770,33 @@ func NewMarkdownChunkerWithConfig(config *ChunkerConfig) *MarkdownChunker {
 			"memory_limit_mb", config.MemoryLimit/(1024*1024),
 			"object_pooling_enabled", config.EnableObjectPooling,
 			"function", "NewMarkdownChunkerWithConfig")
+	} else {
+		logger.Debugw("内存优化器未启用",
+			"function", "NewMarkdownChunkerWithConfig",
+			"reason", "memory_limit_and_object_pooling_disabled")
 	}
 
 	// 创建优化的字符串操作
+	logger.Debugw("初始化字符串操作优化器",
+		"function", "NewMarkdownChunkerWithConfig")
+
 	stringOps := NewOptimizedStringOperations()
+
+	// 记录自定义元数据提取器信息
+	if len(config.CustomExtractors) > 0 {
+		logger.Infow("自定义元数据提取器配置",
+			"function", "NewMarkdownChunkerWithConfig",
+			"extractors_count", len(config.CustomExtractors))
+	}
+
+	// 记录系统初始化完成日志
+	logger.Infow("MarkdownChunker 系统初始化完成",
+		"function", "NewMarkdownChunkerWithConfig",
+		"initialization_phase", "complete",
+		"components_initialized", []string{
+			"goldmark_parser", "logger", "error_handler",
+			"performance_monitor", "string_operations",
+		})
 
 	return &MarkdownChunker{
 		md:                 md,

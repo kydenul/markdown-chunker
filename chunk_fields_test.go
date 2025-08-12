@@ -277,9 +277,10 @@ Different paragraph.`
 			t.Errorf("Chunk hash should be 64 characters long, got %d for type %s", len(chunk.Hash), chunk.Type)
 		}
 
-		if chunk.Type == "heading" {
+		switch chunk.Type {
+		case "heading":
 			headingHashes = append(headingHashes, chunk.Hash)
-		} else if chunk.Type == "paragraph" {
+		case "paragraph":
 			paragraphHashes = append(paragraphHashes, chunk.Hash)
 		}
 	}

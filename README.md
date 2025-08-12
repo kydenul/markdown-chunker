@@ -16,6 +16,7 @@ A Go library for intelligently splitting Markdown documents into semantic chunks
 - **Position Tracking**: Precise position information for each chunk in the original document
 - **Content Deduplication**: SHA256 hash-based content deduplication
 - **Memory Optimization**: Object pooling and memory-efficient processing for large documents
+- **Comprehensive Logging**: Configurable logging system with multiple levels and formats
 - **Easy Integration**: Simple API for processing Markdown documents
 
 ## Installation
@@ -89,6 +90,12 @@ func main() {
         "list":       false, // Disable list processing
     }
     
+    // Configure logging
+    config.EnableLog = true
+    config.LogLevel = "INFO"
+    config.LogFormat = "console"
+    config.LogDirectory = "./logs"
+    
     // Add custom metadata extractors
     config.CustomExtractors = []mc.MetadataExtractor{
         &mc.LinkExtractor{},
@@ -130,6 +137,35 @@ func main() {
     stats := chunker.GetPerformanceStats()
     fmt.Printf("Processing time: %v\n", stats.ProcessingTime)
     fmt.Printf("Memory used: %d bytes\n", stats.MemoryUsed)
+}
+```
+
+### Logging Usage
+
+```go
+package main
+
+import (
+    "fmt"
+    mc "github.com/kydenul/markdown-chunker"
+)
+
+func main() {
+    // Configure logging
+    config := mc.DefaultConfig()
+    config.EnableLog = true
+    config.LogLevel = "DEBUG"        // DEBUG, INFO, WARN, ERROR
+    config.LogFormat = "json"        // console, json
+    config.LogDirectory = "./logs"   // Log file directory
+
+    chunker := mc.NewMarkdownChunkerWithConfig(config)
+    chunks, err := chunker.ChunkDocument([]byte(markdown))
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Printf("Processed %d chunks with detailed logging\n", len(chunks))
+    fmt.Printf("Check %s directory for log files\n", config.LogDirectory)
 }
 ```
 
@@ -201,6 +237,12 @@ type ChunkerConfig struct {
     PreserveWhitespace  bool                   // Preserve whitespace in content
     MemoryLimit         int64                  // Memory usage limit in bytes
     EnableObjectPooling bool                   // Enable object pooling for performance
+    
+    // Logging configuration
+    LogLevel            string                 // Log level: DEBUG, INFO, WARN, ERROR
+    EnableLog           bool                   // Enable/disable logging
+    LogFormat           string                 // Log format: console, json
+    LogDirectory        string                 // Log file directory
 }
 ```
 
@@ -322,6 +364,117 @@ func DefaultConfig() *ChunkerConfig
 func ValidateConfig(config *ChunkerConfig) error
 ```
 
+## Logging Features
+
+The library provides comprehensive logging capabilities to help with debugging, monitoring, and performance analysis.
+
+### Log Levels
+
+- **DEBUG**: Detailed information for debugging, including node processing and metadata extraction
+- **INFO**: General information about processing progress and results
+- **WARN**: Warning messages for potential issues
+- **ERROR**: Error messages for processing failures
+
+### Log Formats
+
+- **console**: Human-readable format suitable for development and debugging
+- **json**: Structured JSON format suitable for log aggregation and analysis
+
+### Logging Configuration
+
+```go
+config := mc.DefaultConfig()
+
+// Enable logging
+config.EnableLog = true
+
+// Set log level (DEBUG, INFO, WARN, ERROR)
+config.LogLevel = "INFO"
+
+// Set log format (console, json)
+config.LogFormat = "console"
+
+// Set log directory
+config.LogDirectory = "./logs"
+```
+
+### Logging Examples
+
+#### Basic Logging
+
+```go
+config := mc.DefaultConfig()
+config.EnableLog = true
+config.LogLevel = "INFO"
+config.LogFormat = "console"
+config.LogDirectory = "./logs"
+
+chunker := mc.NewMarkdownChunkerWithConfig(config)
+chunks, err := chunker.ChunkDocument([]byte(markdown))
+```
+
+#### Debug Logging with JSON Format
+
+```go
+config := mc.DefaultConfig()
+config.EnableLog = true
+config.LogLevel = "DEBUG"
+config.LogFormat = "json"
+config.LogDirectory = "./debug-logs"
+
+chunker := mc.NewMarkdownChunkerWithConfig(config)
+chunks, err := chunker.ChunkDocument([]byte(markdown))
+```
+
+#### Error Logging
+
+```go
+config := mc.DefaultConfig()
+config.EnableLog = true
+config.LogLevel = "ERROR"
+config.LogFormat = "console"
+config.LogDirectory = "./error-logs"
+config.MaxChunkSize = 100  // Small limit to trigger errors
+config.ErrorHandling = mc.ErrorModePermissive
+
+chunker := mc.NewMarkdownChunkerWithConfig(config)
+chunks, err := chunker.ChunkDocument([]byte(markdown))
+
+// Errors are logged to files and can also be retrieved programmatically
+if chunker.HasErrors() {
+    for _, err := range chunker.GetErrors() {
+        fmt.Printf("Error: %s - %s\n", err.Type.String(), err.Message)
+    }
+}
+```
+
+### Log Output Examples
+
+#### Console Format
+
+```LOG
+2024-01-15 10:30:45 INFO  [chunker.go:123] Starting document processing
+2024-01-15 10:30:45 DEBUG [chunker.go:145] Processing heading node: "Introduction"
+2024-01-15 10:30:45 INFO  [chunker.go:234] Document processing completed: 15 chunks, 2.3ms
+```
+
+#### JSON Format
+
+```json
+{
+  "timestamp": "2024-01-15T10:30:45Z",
+  "level": "INFO",
+  "message": "Starting document processing",
+  "function": "ChunkDocument",
+  "file": "chunker.go",
+  "line": 123,
+  "context": {
+    "document_size": 1024,
+    "config": {"max_chunk_size": 1000}
+  }
+}
+```
+
 ## Examples
 
 ### Error Handling Example
@@ -397,6 +550,110 @@ func main() {
 }
 ```
 
+### Comprehensive Logging Example
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+    mc "github.com/kydenul/markdown-chunker"
+)
+
+func main() {
+    // Create configuration with comprehensive logging
+    config := mc.DefaultConfig()
+    
+    // Enable detailed logging
+    config.EnableLog = true
+    config.LogLevel = "DEBUG"
+    config.LogFormat = "json"
+    config.LogDirectory = "./comprehensive-logs"
+    
+    // Configure processing options
+    config.MaxChunkSize = 1000
+    config.ErrorHandling = mc.ErrorModePermissive
+    config.PerformanceMode = mc.PerformanceModeSpeedOptimized
+    
+    // Add metadata extractors for detailed logging
+    config.CustomExtractors = []mc.MetadataExtractor{
+        &mc.LinkExtractor{},
+        &mc.ImageExtractor{},
+        &mc.CodeComplexityExtractor{},
+    }
+    
+    chunker := mc.NewMarkdownChunkerWithConfig(config)
+    
+    markdown := `# Logging Test Document
+
+This document tests comprehensive logging features.
+
+## Code Analysis
+
+` + "```python" + `
+def complex_algorithm(data):
+    result = []
+    for item in data:
+        if item > 0:
+            for i in range(item):
+                if i % 2 == 0:
+                    result.append(i * 2)
+                else:
+                    result.append(i * 3)
+    return result
+` + "```" + `
+
+## Links and Images
+
+Visit [our website](https://example.com) or check the ![logo](logo.png).
+
+| Feature | Status | Link |
+|---------|--------|------|
+| Logging | Active | [docs](/logging) |
+| Metrics | Beta | [metrics](/metrics) |`
+
+    // Process with detailed logging
+    chunks, err := chunker.ChunkDocument([]byte(markdown))
+    if err != nil {
+        fmt.Printf("Processing error: %v\n", err)
+    }
+    
+    fmt.Printf("Processing Results:\n")
+    fmt.Printf("  Chunks created: %d\n", len(chunks))
+    fmt.Printf("  Log directory: %s\n", config.LogDirectory)
+    
+    // Display performance stats (also logged)
+    stats := chunker.GetPerformanceStats()
+    fmt.Printf("  Processing time: %v\n", stats.ProcessingTime)
+    fmt.Printf("  Memory used: %d KB\n", stats.MemoryUsed/1024)
+    
+    // Show log files created
+    if files, err := os.ReadDir(config.LogDirectory); err == nil {
+        fmt.Printf("  Log files created:\n")
+        for _, file := range files {
+            if !file.IsDir() {
+                fmt.Printf("    - %s\n", file.Name())
+            }
+        }
+    }
+    
+    // Display any errors (also logged)
+    if chunker.HasErrors() {
+        fmt.Printf("  Errors encountered: %d\n", len(chunker.GetErrors()))
+        for _, err := range chunker.GetErrors() {
+            fmt.Printf("    - %s: %s\n", err.Type.String(), err.Message)
+        }
+    }
+    
+    fmt.Println("\nCheck the log files for detailed processing information:")
+    fmt.Println("  - DEBUG logs show node processing details")
+    fmt.Println("  - INFO logs show processing progress")
+    fmt.Println("  - Performance metrics are logged")
+    fmt.Println("  - Error details are logged with context")
+}
+```
+
 ### Advanced Configuration Example
 
 ```go
@@ -420,6 +677,12 @@ func main() {
         "list":       false,
         "blockquote": false,
     }
+    
+    // Configure logging
+    config.EnableLog = true
+    config.LogLevel = "INFO"
+    config.LogFormat = "console"
+    config.LogDirectory = "./processing-logs"
     
     // Add custom metadata extractors
     config.CustomExtractors = []mc.MetadataExtractor{
@@ -496,6 +759,8 @@ def complex_function():
             fmt.Printf("  - %s: %s\n", err.Type.String(), err.Message)
         }
     }
+    
+    fmt.Printf("\nProcessing logged to: %s\n", config.LogDirectory)
 }
 ```
 
@@ -658,7 +923,17 @@ type PerformanceStats struct {
 
 ## Changelog
 
-### v2.0.0 (Latest)
+### v2.1.0 (Latest)
+
+- **Comprehensive Logging System**: Configurable logging with multiple levels (DEBUG, INFO, WARN, ERROR)
+- **Multiple Log Formats**: Support for console and JSON log formats
+- **Structured Logging**: Rich context information including function names, line numbers, and processing metrics
+- **Performance Logging**: Detailed performance metrics and memory usage tracking
+- **Error Context Logging**: Enhanced error logging with full context information
+- **Configurable Log Directory**: Flexible log file location configuration
+- **Integration with All Features**: Logging integrated with error handling, performance monitoring, and metadata extraction
+
+### v2.0.0
 
 - **Enhanced Configuration System**: Flexible configuration with validation
 - **Advanced Error Handling**: Multiple error modes with detailed error information

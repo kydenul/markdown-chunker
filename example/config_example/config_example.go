@@ -110,6 +110,46 @@ func main() {
 	for _, chunk := range chunks3 {
 		fmt.Printf("- %s (%d chars): %s\n", chunk.Type, len(chunk.Content), truncateString(chunk.Text, 50))
 	}
+
+	fmt.Println("\n=== 自定义配置示例 4：启用日志功能 ===")
+	config4 := mc.DefaultConfig()
+	config4.EnableLog = true
+	config4.LogLevel = "INFO"
+	config4.LogFormat = "console"
+	config4.LogDirectory = "./example-logs"
+
+	chunker4 := mc.NewMarkdownChunkerWithConfig(config4)
+	chunks4, err := chunker4.ChunkDocument([]byte(markdown))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("启用日志功能：%d 个块\n", len(chunks4))
+	fmt.Printf("日志级别：%s\n", config4.LogLevel)
+	fmt.Printf("日志格式：%s\n", config4.LogFormat)
+	fmt.Printf("日志目录：%s\n", config4.LogDirectory)
+	fmt.Println("请查看 ./example-logs 目录中的日志文件")
+
+	fmt.Println("\n=== 自定义配置示例 5：调试级别日志 ===")
+	config5 := mc.DefaultConfig()
+	config5.EnableLog = true
+	config5.LogLevel = "DEBUG"
+	config5.LogFormat = "json"
+	config5.LogDirectory = "./debug-logs"
+	config5.CustomExtractors = []mc.MetadataExtractor{
+		&mc.LinkExtractor{},
+		&mc.CodeComplexityExtractor{},
+	}
+
+	chunker5 := mc.NewMarkdownChunkerWithConfig(config5)
+	chunks5, err := chunker5.ChunkDocument([]byte(markdown))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("调试级别日志：%d 个块\n", len(chunks5))
+	fmt.Printf("日志级别：%s（包含详细的调试信息）\n", config5.LogLevel)
+	fmt.Printf("日志格式：%s（结构化JSON格式）\n", config5.LogFormat)
+	fmt.Printf("日志目录：%s\n", config5.LogDirectory)
+	fmt.Println("DEBUG级别会记录详细的处理过程，包括节点处理、元数据提取等信息")
 }
 
 func truncateString(s string, maxLen int) string {

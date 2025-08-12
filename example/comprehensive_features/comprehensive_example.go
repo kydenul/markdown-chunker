@@ -21,6 +21,7 @@ func main() {
 	demonstrateAdvancedFeatures(complexMarkdown)
 	demonstrateErrorHandlingAndRecovery(complexMarkdown)
 	demonstratePerformanceMonitoring(complexMarkdown)
+	demonstrateLoggingFeatures(complexMarkdown)
 	demonstrateMetadataExtraction(complexMarkdown)
 	demonstrateContentAnalysis(complexMarkdown)
 }
@@ -428,6 +429,74 @@ func demonstratePerformanceMonitoring(markdown string) {
 	fmt.Printf("  平均每块大小: %.2f 字节\n", float64(stats.ChunkBytes)/float64(len(chunks)))
 }
 
+// demonstrateLoggingFeatures 演示日志功能
+func demonstrateLoggingFeatures(markdown string) {
+	fmt.Println("\n=== 5. 日志功能演示 ===")
+
+	// 演示不同日志级别
+	logLevels := []string{"ERROR", "WARN", "INFO", "DEBUG"}
+
+	for _, level := range logLevels {
+		fmt.Printf("测试日志级别: %s\n", level)
+
+		config := mc.DefaultConfig()
+		config.EnableLog = true
+		config.LogLevel = level
+		config.LogFormat = "console"
+		config.LogDirectory = fmt.Sprintf("./demo-logs/%s", strings.ToLower(level))
+
+		// 为了演示错误日志，在某些级别设置小的块大小限制
+		if level == "ERROR" || level == "WARN" {
+			config.MaxChunkSize = 200
+			config.ErrorHandling = mc.ErrorModePermissive
+		}
+
+		chunker := mc.NewMarkdownChunkerWithConfig(config)
+		start := time.Now()
+		chunks, err := chunker.ChunkDocument([]byte(markdown))
+		processingTime := time.Since(start)
+
+		fmt.Printf("  处理结果: %d 个块\n", len(chunks))
+		fmt.Printf("  处理时间: %v\n", processingTime)
+		fmt.Printf("  返回错误: %v\n", err)
+
+		if chunker.HasErrors() {
+			fmt.Printf("  记录的错误: %d\n", len(chunker.GetErrors()))
+		}
+
+		fmt.Printf("  日志目录: %s\n", config.LogDirectory)
+		fmt.Println()
+	}
+
+	// 演示JSON格式日志
+	fmt.Println("JSON格式日志演示:")
+	config := mc.DefaultConfig()
+	config.EnableLog = true
+	config.LogLevel = "INFO"
+	config.LogFormat = "json"
+	config.LogDirectory = "./demo-logs/json"
+	config.CustomExtractors = []mc.MetadataExtractor{
+		&mc.LinkExtractor{},
+		&mc.ImageExtractor{},
+		&mc.CodeComplexityExtractor{},
+	}
+
+	chunker := mc.NewMarkdownChunkerWithConfig(config)
+	chunks, err := chunker.ChunkDocument([]byte(markdown))
+
+	fmt.Printf("  JSON格式处理结果: %d 个块\n", len(chunks))
+	fmt.Printf("  返回错误: %v\n", err)
+	fmt.Printf("  日志目录: %s\n", config.LogDirectory)
+	fmt.Println("  JSON格式便于日志聚合和分析")
+
+	// 显示性能统计（也会被记录到日志中）
+	stats := chunker.GetPerformanceStats()
+	fmt.Printf("  性能统计（已记录到日志）:\n")
+	fmt.Printf("    处理时间: %v\n", stats.ProcessingTime)
+	fmt.Printf("    内存使用: %d KB\n", stats.MemoryUsed/1024)
+	fmt.Printf("    处理速度: %.2f 块/秒\n", stats.ChunksPerSecond)
+}
+
 // demonstrateMetadataExtraction 演示元数据提取
 func demonstrateMetadataExtraction(markdown string) {
 	fmt.Println("\n=== 5. 元数据提取演示 ===")
@@ -500,7 +569,7 @@ func demonstrateMetadataExtraction(markdown string) {
 
 // demonstrateContentAnalysis 演示内容分析
 func demonstrateContentAnalysis(markdown string) {
-	fmt.Println("\n=== 6. 内容分析演示 ===")
+	fmt.Println("\n=== 7. 内容分析演示 ===")
 
 	chunker := mc.NewMarkdownChunker()
 	chunks, err := chunker.ChunkDocument([]byte(markdown))

@@ -90,8 +90,12 @@ def complex_algorithm(data):
 	fmt.Println("\n6. 块大小限制配置")
 	demonstrateChunkSizeLimits(testMarkdown)
 
-	// 示例 7: 完整的高级配置
-	fmt.Println("\n7. 完整的高级配置")
+	// 示例 7: 日志功能配置
+	fmt.Println("\n7. 日志功能配置")
+	demonstrateLoggingConfiguration(testMarkdown)
+
+	// 示例 8: 完整的高级配置
+	fmt.Println("\n8. 完整的高级配置")
 	demonstrateCompleteAdvancedConfiguration(testMarkdown)
 }
 
@@ -328,6 +332,62 @@ func demonstrateChunkSizeLimits(markdown string) {
 	}
 }
 
+// demonstrateLoggingConfiguration 演示日志功能配置
+func demonstrateLoggingConfiguration(markdown string) {
+	fmt.Println("日志功能配置演示:")
+
+	// 示例 1: 基本日志配置
+	fmt.Println("  基本日志配置:")
+	config1 := mc.DefaultConfig()
+	config1.EnableLog = true
+	config1.LogLevel = "INFO"
+	config1.LogFormat = "console"
+	config1.LogDirectory = "./demo-logs/basic"
+
+	chunker1 := mc.NewMarkdownChunkerWithConfig(config1)
+	chunks1, _ := chunker1.ChunkDocument([]byte(markdown))
+
+	fmt.Printf("    处理结果: %d 个块\n", len(chunks1))
+	fmt.Printf("    日志级别: %s\n", config1.LogLevel)
+	fmt.Printf("    日志格式: %s\n", config1.LogFormat)
+	fmt.Printf("    日志目录: %s\n", config1.LogDirectory)
+
+	// 示例 2: 调试级别日志
+	fmt.Println("  调试级别日志:")
+	config2 := mc.DefaultConfig()
+	config2.EnableLog = true
+	config2.LogLevel = "DEBUG"
+	config2.LogFormat = "json"
+	config2.LogDirectory = "./demo-logs/debug"
+
+	chunker2 := mc.NewMarkdownChunkerWithConfig(config2)
+	chunks2, _ := chunker2.ChunkDocument([]byte(markdown))
+
+	fmt.Printf("    处理结果: %d 个块\n", len(chunks2))
+	fmt.Printf("    日志级别: %s (详细调试信息)\n", config2.LogLevel)
+	fmt.Printf("    日志格式: %s (结构化格式)\n", config2.LogFormat)
+
+	// 示例 3: 错误处理与日志
+	fmt.Println("  错误处理与日志:")
+	config3 := mc.DefaultConfig()
+	config3.EnableLog = true
+	config3.LogLevel = "WARN"
+	config3.LogFormat = "console"
+	config3.LogDirectory = "./demo-logs/errors"
+	config3.MaxChunkSize = 50 // 小限制，会产生错误
+	config3.ErrorHandling = mc.ErrorModePermissive
+
+	chunker3 := mc.NewMarkdownChunkerWithConfig(config3)
+	chunks3, err3 := chunker3.ChunkDocument([]byte(markdown))
+
+	fmt.Printf("    处理结果: %d 个块\n", len(chunks3))
+	fmt.Printf("    返回错误: %v\n", err3)
+	fmt.Printf("    记录的错误: %d\n", len(chunker3.GetErrors()))
+	fmt.Printf("    日志级别: %s (记录警告和错误)\n", config3.LogLevel)
+
+	fmt.Println("  注意: 请查看相应的日志目录以了解详细的日志输出")
+}
+
 // demonstrateCompleteAdvancedConfiguration 演示完整的高级配置
 func demonstrateCompleteAdvancedConfiguration(markdown string) {
 	config := mc.DefaultConfig()
@@ -355,6 +415,12 @@ func demonstrateCompleteAdvancedConfiguration(markdown string) {
 	config.PerformanceMode = mc.PerformanceModeSpeedOptimized
 	config.EnableObjectPooling = true
 	config.MemoryLimit = 50 * 1024 * 1024 // 50MB
+
+	// 日志配置
+	config.EnableLog = true
+	config.LogLevel = "INFO"
+	config.LogFormat = "json"
+	config.LogDirectory = "./demo-logs/complete"
 
 	// 自定义元数据提取器
 	config.CustomExtractors = []mc.MetadataExtractor{
