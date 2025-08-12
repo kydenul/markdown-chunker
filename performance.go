@@ -4,6 +4,8 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/kydenul/log"
 )
 
 // PerformanceStats 性能统计信息
@@ -29,6 +31,7 @@ type PerformanceMonitor struct {
 	chunkBytes    int64 // 块内容总字节数
 	chunkCount    int
 	isRunning     bool
+	logger        log.Logger // 日志器实例
 }
 
 // NewPerformanceMonitor 创建新的性能监控器
@@ -40,6 +43,13 @@ func NewPerformanceMonitor() *PerformanceMonitor {
 		chunkCount: 0,
 		isRunning:  false,
 	}
+}
+
+// SetLogger 设置日志器
+func (pm *PerformanceMonitor) SetLogger(logger log.Logger) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.logger = logger
 }
 
 // Start 开始性能监控
@@ -55,6 +65,14 @@ func (pm *PerformanceMonitor) Start() {
 	pm.chunkBytes = 0
 	pm.chunkCount = 0
 	pm.isRunning = true
+
+	if pm.logger != nil {
+		pm.logger.Infow("性能监控开始",
+			"start_time", pm.startTime.Format("2006-01-02 15:04:05.000"),
+			"initial_memory_bytes", pm.initialMemory,
+			"initial_memory_mb", pm.initialMemory/(1024*1024),
+			"function", "PerformanceMonitor.Start")
+	}
 }
 
 // Stop 停止性能监控
@@ -65,6 +83,37 @@ func (pm *PerformanceMonitor) Stop() {
 	if pm.isRunning {
 		pm.endTime = time.Now()
 		pm.isRunning = false
+
+		if pm.logger != nil {
+			processingTime := pm.endTime.Sub(pm.startTime)
+			currentMemory := pm.getCurrentMemoryUsage()
+			memoryUsed := currentMemory - pm.initialMemory
+
+			pm.logger.Infow("性能监控结束",
+				"end_time", pm.endTime.Format("2006-01-02 15:04:05.000"),
+				"processing_time_ms", processingTime.Milliseconds(),
+				"processing_time_seconds", processingTime.Seconds(),
+				"total_chunks", pm.chunkCount,
+				"total_bytes", pm.totalBytes,
+				"chunk_bytes", pm.chunkBytes,
+				"memory_used_bytes", memoryUsed,
+				"memory_used_mb", memoryUsed/(1024*1024),
+				"peak_memory_bytes", pm.peakMemory,
+				"peak_memory_mb", pm.peakMemory/(1024*1024),
+				"function", "PerformanceMonitor.Stop")
+
+			// 计算性能指标
+			if processingTime > 0 {
+				chunksPerSecond := float64(pm.chunkCount) / processingTime.Seconds()
+				bytesPerSecond := float64(pm.totalBytes) / processingTime.Seconds()
+
+				pm.logger.Infow("性能指标统计",
+					"chunks_per_second", chunksPerSecond,
+					"bytes_per_second", bytesPerSecond,
+					"mb_per_second", bytesPerSecond/(1024*1024),
+					"function", "PerformanceMonitor.Stop")
+			}
+		}
 	}
 }
 
@@ -82,8 +131,41 @@ func (pm *PerformanceMonitor) RecordChunk(chunk *Chunk) {
 
 	// 更新峰值内存使用
 	currentMemory := pm.getCurrentMemoryUsage()
+	previousPeak := pm.peakMemory
 	if currentMemory > pm.peakMemory {
 		pm.peakMemory = currentMemory
+
+		// 记录新的内存峰值
+		if pm.logger != nil {
+			pm.logger.Debugw("检测到新的内存使用峰值",
+				"previous_peak_bytes", previousPeak,
+				"previous_peak_mb", previousPeak/(1024*1024),
+				"new_peak_bytes", pm.peakMemory,
+				"new_peak_mb", pm.peakMemory/(1024*1024),
+				"memory_increase_bytes", pm.peakMemory-previousPeak,
+				"memory_increase_mb", (pm.peakMemory-previousPeak)/(1024*1024),
+				"chunk_id", chunk.ID,
+				"chunk_type", chunk.Type,
+				"chunk_size_bytes", len(chunk.Content),
+				"total_chunks_processed", pm.chunkCount,
+				"function", "PerformanceMonitor.RecordChunk")
+		}
+	}
+
+	// 每处理100个块记录一次进度
+	if pm.chunkCount%100 == 0 && pm.logger != nil {
+		elapsedTime := time.Since(pm.startTime)
+		chunksPerSecond := float64(pm.chunkCount) / elapsedTime.Seconds()
+
+		pm.logger.Infow("块处理进度报告",
+			"chunks_processed", pm.chunkCount,
+			"elapsed_time_seconds", elapsedTime.Seconds(),
+			"chunks_per_second", chunksPerSecond,
+			"current_memory_bytes", currentMemory,
+			"current_memory_mb", currentMemory/(1024*1024),
+			"peak_memory_bytes", pm.peakMemory,
+			"peak_memory_mb", pm.peakMemory/(1024*1024),
+			"function", "PerformanceMonitor.RecordChunk")
 	}
 }
 
@@ -97,6 +179,24 @@ func (pm *PerformanceMonitor) RecordBytes(bytes int64) {
 	}
 
 	pm.totalBytes += bytes
+
+	if pm.logger != nil {
+		pm.logger.Debugw("记录处理字节数",
+			"bytes_added", bytes,
+			"bytes_added_mb", bytes/(1024*1024),
+			"total_bytes", pm.totalBytes,
+			"total_mb", pm.totalBytes/(1024*1024),
+			"function", "PerformanceMonitor.RecordBytes")
+
+		// 对大型文档记录警告
+		if pm.totalBytes > 50*1024*1024 { // 50MB
+			pm.logger.Warnw("处理大型文档",
+				"total_bytes", pm.totalBytes,
+				"total_mb", pm.totalBytes/(1024*1024),
+				"recommendation", "考虑分批处理以优化内存使用",
+				"function", "PerformanceMonitor.RecordBytes")
+		}
+	}
 }
 
 // GetStats 获取性能统计信息
@@ -159,6 +259,43 @@ func (pm *PerformanceMonitor) getCurrentMemoryUsage() int64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	return int64(m.Alloc)
+}
+
+// CheckMemoryThresholds 检查内存使用阈值并记录警告
+func (pm *PerformanceMonitor) CheckMemoryThresholds() {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	if pm.logger == nil {
+		return
+	}
+
+	currentMemory := pm.getCurrentMemoryUsage()
+	memoryIncrease := currentMemory - pm.initialMemory
+
+	// 内存使用超过100MB时记录警告
+	if memoryIncrease > 100*1024*1024 {
+		pm.logger.Warnw("内存使用量较高",
+			"current_memory_bytes", currentMemory,
+			"current_memory_mb", currentMemory/(1024*1024),
+			"memory_increase_bytes", memoryIncrease,
+			"memory_increase_mb", memoryIncrease/(1024*1024),
+			"initial_memory_mb", pm.initialMemory/(1024*1024),
+			"recommendation", "考虑启用内存优化或增加内存限制",
+			"function", "PerformanceMonitor.CheckMemoryThresholds")
+	}
+
+	// 内存使用超过500MB时记录错误
+	if memoryIncrease > 500*1024*1024 {
+		pm.logger.Errorw("内存使用量过高",
+			"current_memory_bytes", currentMemory,
+			"current_memory_mb", currentMemory/(1024*1024),
+			"memory_increase_bytes", memoryIncrease,
+			"memory_increase_mb", memoryIncrease/(1024*1024),
+			"initial_memory_mb", pm.initialMemory/(1024*1024),
+			"recommendation", "立即考虑优化内存使用或终止处理",
+			"function", "PerformanceMonitor.CheckMemoryThresholds")
+	}
 }
 
 // ForceGC 强制垃圾回收（用于测试和内存优化）

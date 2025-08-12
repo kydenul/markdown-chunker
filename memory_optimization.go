@@ -4,6 +4,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/kydenul/log"
 )
 
 // ObjectPool 对象池接口
@@ -104,6 +106,7 @@ func (sbp *StringBuilderPool) Put(sb *strings.Builder) {
 type MemoryLimiter struct {
 	maxMemoryBytes int64
 	mu             sync.RWMutex
+	logger         log.Logger // 日志器实例
 }
 
 // NewMemoryLimiter 创建新的内存限制器
@@ -111,6 +114,13 @@ func NewMemoryLimiter(maxMemoryBytes int64) *MemoryLimiter {
 	return &MemoryLimiter{
 		maxMemoryBytes: maxMemoryBytes,
 	}
+}
+
+// SetLogger 设置日志器
+func (ml *MemoryLimiter) SetLogger(logger log.Logger) {
+	ml.mu.Lock()
+	defer ml.mu.Unlock()
+	ml.logger = logger
 }
 
 // CheckMemoryLimit 检查内存使用是否超过限制
@@ -125,11 +135,60 @@ func (ml *MemoryLimiter) CheckMemoryLimit() error {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	if int64(m.Alloc) > ml.maxMemoryBytes {
+	currentMemory := int64(m.Alloc)
+	usageRatio := float64(currentMemory) / float64(ml.maxMemoryBytes)
+
+	// 记录内存使用情况
+	if ml.logger != nil {
+		ml.logger.Debugw("内存使用检查",
+			"current_memory_bytes", currentMemory,
+			"current_memory_mb", currentMemory/(1024*1024),
+			"memory_limit_bytes", ml.maxMemoryBytes,
+			"memory_limit_mb", ml.maxMemoryBytes/(1024*1024),
+			"usage_ratio", usageRatio,
+			"usage_percentage", usageRatio*100,
+			"function", "MemoryLimiter.CheckMemoryLimit")
+
+		// 内存使用超过80%时记录警告
+		if usageRatio > 0.8 {
+			ml.logger.Warnw("内存使用接近限制",
+				"current_memory_mb", currentMemory/(1024*1024),
+				"memory_limit_mb", ml.maxMemoryBytes/(1024*1024),
+				"usage_percentage", usageRatio*100,
+				"remaining_mb", (ml.maxMemoryBytes-currentMemory)/(1024*1024),
+				"recommendation", "考虑优化内存使用或增加限制",
+				"function", "MemoryLimiter.CheckMemoryLimit")
+		}
+	}
+
+	if currentMemory > ml.maxMemoryBytes {
+		if ml.logger != nil {
+			ml.logger.Errorw("内存使用超过限制",
+				"current_memory_bytes", currentMemory,
+				"current_memory_mb", currentMemory/(1024*1024),
+				"memory_limit_bytes", ml.maxMemoryBytes,
+				"memory_limit_mb", ml.maxMemoryBytes/(1024*1024),
+				"usage_ratio", usageRatio,
+				"excess_bytes", currentMemory-ml.maxMemoryBytes,
+				"excess_mb", (currentMemory-ml.maxMemoryBytes)/(1024*1024),
+				"total_alloc_bytes", int64(m.TotalAlloc),
+				"sys_memory_bytes", int64(m.Sys),
+				"gc_count", m.NumGC,
+				"function", "MemoryLimiter.CheckMemoryLimit")
+		}
+
 		return NewChunkerError(ErrorTypeMemoryExhausted,
-			"memory usage exceeds limit", nil).
-			WithContext("current_memory", int64(m.Alloc)).
-			WithContext("memory_limit", ml.maxMemoryBytes)
+			"内存使用量超过配置限制", nil).
+			WithContext("function", "CheckMemoryUsage").
+			WithContext("current_memory_bytes", currentMemory).
+			WithContext("memory_limit_bytes", ml.maxMemoryBytes).
+			WithContext("current_memory_mb", currentMemory/(1024*1024)).
+			WithContext("memory_limit_mb", ml.maxMemoryBytes/(1024*1024)).
+			WithContext("usage_ratio", usageRatio).
+			WithContext("total_alloc_bytes", int64(m.TotalAlloc)).
+			WithContext("sys_memory_bytes", int64(m.Sys)).
+			WithContext("gc_count", m.NumGC).
+			WithContext("recommendation", "考虑增加内存限制或优化处理策略")
 	}
 
 	return nil
@@ -164,6 +223,7 @@ type MemoryOptimizer struct {
 	gcThreshold       int64 // GC触发阈值
 	processedBytes    int64 // 已处理字节数
 	mu                sync.RWMutex
+	logger            log.Logger // 日志器实例
 }
 
 // NewMemoryOptimizer 创建新的内存优化器
@@ -175,6 +235,14 @@ func NewMemoryOptimizer(memoryLimit int64) *MemoryOptimizer {
 		gcThreshold:       10 * 1024 * 1024, // 10MB
 		processedBytes:    0,
 	}
+}
+
+// SetLogger 设置日志器
+func (mo *MemoryOptimizer) SetLogger(logger log.Logger) {
+	mo.mu.Lock()
+	defer mo.mu.Unlock()
+	mo.logger = logger
+	mo.memoryLimiter.SetLogger(logger)
 }
 
 // GetChunk 获取一个优化的块对象
@@ -209,10 +277,50 @@ func (mo *MemoryOptimizer) RecordProcessedBytes(bytes int64) {
 
 	mo.processedBytes += bytes
 
+	if mo.logger != nil {
+		mo.logger.Debugw("记录已处理字节数",
+			"bytes_added", bytes,
+			"bytes_added_mb", bytes/(1024*1024),
+			"total_processed_bytes", mo.processedBytes,
+			"total_processed_mb", mo.processedBytes/(1024*1024),
+			"gc_threshold_bytes", mo.gcThreshold,
+			"gc_threshold_mb", mo.gcThreshold/(1024*1024),
+			"function", "MemoryOptimizer.RecordProcessedBytes")
+	}
+
 	// 如果处理的字节数超过阈值，触发GC
 	if mo.processedBytes >= mo.gcThreshold {
+		var beforeGC runtime.MemStats
+		if mo.logger != nil {
+			runtime.ReadMemStats(&beforeGC)
+
+			mo.logger.Infow("触发垃圾回收",
+				"processed_bytes", mo.processedBytes,
+				"processed_mb", mo.processedBytes/(1024*1024),
+				"gc_threshold_mb", mo.gcThreshold/(1024*1024),
+				"memory_before_gc_bytes", int64(beforeGC.Alloc),
+				"memory_before_gc_mb", int64(beforeGC.Alloc)/(1024*1024),
+				"gc_count_before", beforeGC.NumGC,
+				"function", "MemoryOptimizer.RecordProcessedBytes")
+		}
+
 		runtime.GC()
 		mo.processedBytes = 0
+
+		if mo.logger != nil {
+			var afterGC runtime.MemStats
+			runtime.ReadMemStats(&afterGC)
+
+			memoryFreed := int64(beforeGC.Alloc) - int64(afterGC.Alloc)
+
+			mo.logger.Infow("垃圾回收完成",
+				"memory_after_gc_bytes", int64(afterGC.Alloc),
+				"memory_after_gc_mb", int64(afterGC.Alloc)/(1024*1024),
+				"memory_freed_bytes", memoryFreed,
+				"memory_freed_mb", memoryFreed/(1024*1024),
+				"gc_count_after", afterGC.NumGC,
+				"function", "MemoryOptimizer.RecordProcessedBytes")
+		}
 	}
 }
 
@@ -232,10 +340,36 @@ func (mo *MemoryOptimizer) GetGCThreshold() int64 {
 
 // ForceGC 强制执行垃圾回收
 func (mo *MemoryOptimizer) ForceGC() {
+	var beforeGC runtime.MemStats
+	if mo.logger != nil {
+		runtime.ReadMemStats(&beforeGC)
+
+		mo.logger.Infow("强制执行垃圾回收",
+			"memory_before_gc_bytes", int64(beforeGC.Alloc),
+			"memory_before_gc_mb", int64(beforeGC.Alloc)/(1024*1024),
+			"gc_count_before", beforeGC.NumGC,
+			"function", "MemoryOptimizer.ForceGC")
+	}
+
 	runtime.GC()
 	mo.mu.Lock()
 	mo.processedBytes = 0
 	mo.mu.Unlock()
+
+	if mo.logger != nil {
+		var afterGC runtime.MemStats
+		runtime.ReadMemStats(&afterGC)
+
+		memoryFreed := int64(beforeGC.Alloc) - int64(afterGC.Alloc)
+
+		mo.logger.Infow("强制垃圾回收完成",
+			"memory_after_gc_bytes", int64(afterGC.Alloc),
+			"memory_after_gc_mb", int64(afterGC.Alloc)/(1024*1024),
+			"memory_freed_bytes", memoryFreed,
+			"memory_freed_mb", memoryFreed/(1024*1024),
+			"gc_count_after", afterGC.NumGC,
+			"function", "MemoryOptimizer.ForceGC")
+	}
 }
 
 // Reset 重置优化器状态

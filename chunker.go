@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"maps"
+	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/kydenul/log"
 	"github.com/yuin/goldmark"
@@ -52,11 +54,23 @@ type Chunk struct {
 	Level    int               `json:"level"`   // 标题层级 (仅对 heading 有效)
 	Metadata map[string]string `json:"metadata"`
 
-	// 新增字段
 	Position ChunkPosition `json:"position"` // 在文档中的位置
 	Links    []Link        `json:"links"`    // 包含的链接
 	Images   []Image       `json:"images"`   // 包含的图片
 	Hash     string        `json:"hash"`     // 内容哈希，用于去重
+}
+
+// LogContext 表示日志上下文信息
+type LogContext struct {
+	FunctionName string                 `json:"function_name"` // 函数名
+	FileName     string                 `json:"file_name"`     // 文件名
+	LineNumber   int                    `json:"line_number"`   // 行号
+	NodeType     string                 `json:"node_type"`     // 节点类型
+	NodeID       int                    `json:"node_id"`       // 节点ID
+	ChunkCount   int                    `json:"chunk_count"`   // 块数量
+	DocumentSize int                    `json:"document_size"` // 文档大小
+	ProcessTime  time.Duration          `json:"process_time"`  // 处理时间
+	Metadata     map[string]interface{} `json:"metadata"`      // 额外元数据
 }
 
 // ErrorHandlingMode 错误处理模式
@@ -89,6 +103,160 @@ type MetadataExtractor interface {
 	Extract(node ast.Node, source []byte) map[string]string
 	// SupportedTypes 返回支持的内容类型
 	SupportedTypes() []string
+}
+
+// NewLogContext 创建新的日志上下文
+func NewLogContext(functionName string) *LogContext {
+	// 获取调用者信息
+	_, file, line, ok := runtime.Caller(1)
+	fileName := "unknown"
+	lineNumber := 0
+
+	if ok {
+		// 提取文件名（不包含路径）
+		parts := strings.Split(file, "/")
+		if len(parts) > 0 {
+			fileName = parts[len(parts)-1]
+		}
+		lineNumber = line
+	}
+
+	return &LogContext{
+		FunctionName: functionName,
+		FileName:     fileName,
+		LineNumber:   lineNumber,
+		Metadata:     make(map[string]interface{}),
+	}
+}
+
+// WithNodeInfo 添加节点信息到日志上下文
+func (lc *LogContext) WithNodeInfo(nodeType string, nodeID int) *LogContext {
+	lc.NodeType = nodeType
+	lc.NodeID = nodeID
+	return lc
+}
+
+// WithDocumentInfo 添加文档信息到日志上下文
+func (lc *LogContext) WithDocumentInfo(documentSize int, chunkCount int) *LogContext {
+	lc.DocumentSize = documentSize
+	lc.ChunkCount = chunkCount
+	return lc
+}
+
+// WithProcessTime 添加处理时间到日志上下文
+func (lc *LogContext) WithProcessTime(duration time.Duration) *LogContext {
+	lc.ProcessTime = duration
+	return lc
+}
+
+// WithMetadata 添加自定义元数据到日志上下文
+func (lc *LogContext) WithMetadata(key string, value interface{}) *LogContext {
+	lc.Metadata[key] = value
+	return lc
+}
+
+// WithTableInfo 添加表格特定信息到日志上下文
+func (lc *LogContext) WithTableInfo(rowCount, columnCount int, isWellFormed bool) *LogContext {
+	lc.Metadata["table_row_count"] = rowCount
+	lc.Metadata["table_column_count"] = columnCount
+	lc.Metadata["table_well_formed"] = isWellFormed
+	return lc
+}
+
+// WithListInfo 添加列表特定信息到日志上下文
+func (lc *LogContext) WithListInfo(listType string, itemCount int) *LogContext {
+	lc.Metadata["list_type"] = listType
+	lc.Metadata["list_item_count"] = itemCount
+	return lc
+}
+
+// WithCodeInfo 添加代码块特定信息到日志上下文
+func (lc *LogContext) WithCodeInfo(language string, lineCount int, codeBlockType string) *LogContext {
+	lc.Metadata["code_language"] = language
+	lc.Metadata["code_line_count"] = lineCount
+	lc.Metadata["code_block_type"] = codeBlockType
+	return lc
+}
+
+// WithHeadingInfo 添加标题特定信息到日志上下文
+func (lc *LogContext) WithHeadingInfo(level int, wordCount int) *LogContext {
+	lc.Metadata["heading_level"] = level
+	lc.Metadata["heading_word_count"] = wordCount
+	return lc
+}
+
+// WithContentInfo 添加内容统计信息到日志上下文
+func (lc *LogContext) WithContentInfo(contentLength, textLength, wordCount int) *LogContext {
+	lc.Metadata["content_length"] = contentLength
+	lc.Metadata["text_length"] = textLength
+	lc.Metadata["word_count"] = wordCount
+	return lc
+}
+
+// WithPositionInfo 添加位置信息到日志上下文
+func (lc *LogContext) WithPositionInfo(startLine, endLine, startCol, endCol int) *LogContext {
+	lc.Metadata["start_line"] = startLine
+	lc.Metadata["end_line"] = endLine
+	lc.Metadata["start_col"] = startCol
+	lc.Metadata["end_col"] = endCol
+	return lc
+}
+
+// WithLinksAndImages 添加链接和图片信息到日志上下文
+func (lc *LogContext) WithLinksAndImages(linksCount, imagesCount int) *LogContext {
+	lc.Metadata["links_count"] = linksCount
+	lc.Metadata["images_count"] = imagesCount
+	return lc
+}
+
+// ToLogFields 将日志上下文转换为日志字段
+func (lc *LogContext) ToLogFields() []interface{} {
+	fields := []interface{}{
+		"function", lc.FunctionName,
+		"file", lc.FileName,
+		"line", lc.LineNumber,
+	}
+
+	if lc.NodeType != "" {
+		fields = append(fields, "node_type", lc.NodeType)
+	}
+	if lc.NodeID != 0 {
+		fields = append(fields, "node_id", lc.NodeID)
+	}
+	if lc.DocumentSize != 0 {
+		fields = append(fields, "document_size", lc.DocumentSize)
+	}
+	if lc.ChunkCount != 0 {
+		fields = append(fields, "chunk_count", lc.ChunkCount)
+	}
+	if lc.ProcessTime != 0 {
+		fields = append(fields, "process_time_ms", lc.ProcessTime.Milliseconds())
+	}
+
+	// 添加自定义元数据
+	for key, value := range lc.Metadata {
+		fields = append(fields, key, value)
+	}
+
+	return fields
+}
+
+// logWithContext 使用上下文信息记录日志的辅助函数
+func (c *MarkdownChunker) logWithContext(level string, message string, context *LogContext) {
+	fields := context.ToLogFields()
+
+	switch level {
+	case "debug":
+		c.logger.Debugw(message, fields...)
+	case "info":
+		c.logger.Infow(message, fields...)
+	case "warn":
+		c.logger.Warnw(message, fields...)
+	case "error":
+		c.logger.Errorw(message, fields...)
+	default:
+		c.logger.Infow(message, fields...)
+	}
 }
 
 // ChunkerConfig 分块器配置
@@ -176,7 +344,8 @@ func parseLogLevel(level string) string {
 // validateLogConfig 验证日志配置的有效性
 func validateLogConfig(config *ChunkerConfig) error {
 	if config == nil {
-		return fmt.Errorf("config cannot be nil")
+		return NewChunkerError(ErrorTypeConfigInvalid, "配置对象不能为空", nil).
+			WithContext("function", "validateLogConfig")
 	}
 
 	// 验证日志级别
@@ -184,7 +353,17 @@ func validateLogConfig(config *ChunkerConfig) error {
 		"DEBUG": true, "INFO": true, "WARN": true, "WARNING": true, "ERROR": true,
 	}
 	if config.LogLevel != "" && !validLevels[strings.ToUpper(config.LogLevel)] {
-		return fmt.Errorf("invalid log level: %s, must be one of DEBUG, INFO, WARN, ERROR", config.LogLevel)
+		var validLevelsList []string
+		for level := range validLevels {
+			validLevelsList = append(validLevelsList, level)
+		}
+
+		return NewChunkerError(ErrorTypeConfigInvalid, "无效的日志级别配置", nil).
+			WithContext("function", "validateLogConfig").
+			WithContext("field", "LogLevel").
+			WithContext("invalid_level", config.LogLevel).
+			WithContext("valid_levels", validLevelsList).
+			WithContext("recommendation", "请使用有效的日志级别")
 	}
 
 	// 验证日志格式
@@ -192,14 +371,27 @@ func validateLogConfig(config *ChunkerConfig) error {
 		"json": true, "console": true,
 	}
 	if config.LogFormat != "" && !validFormats[strings.ToLower(config.LogFormat)] {
-		return fmt.Errorf("invalid log format: %s, must be one of json, console", config.LogFormat)
+		var validFormatsList []string
+		for format := range validFormats {
+			validFormatsList = append(validFormatsList, format)
+		}
+
+		return NewChunkerError(ErrorTypeConfigInvalid, "无效的日志格式配置", nil).
+			WithContext("function", "validateLogConfig").
+			WithContext("field", "LogFormat").
+			WithContext("invalid_format", config.LogFormat).
+			WithContext("valid_formats", validFormatsList).
+			WithContext("recommendation", "请使用json或console格式")
 	}
 
 	// 验证日志目录（如果为空，将使用默认值）
 	if config.LogDirectory != "" {
-		// 这里可以添加更多的目录验证逻辑，比如检查目录是否可写，但为了保持简单，只检查不为空
 		if strings.TrimSpace(config.LogDirectory) == "" {
-			return fmt.Errorf("log directory cannot be empty or whitespace only")
+			return NewChunkerError(ErrorTypeConfigInvalid, "日志目录不能为空白字符", nil).
+				WithContext("function", "validateLogConfig").
+				WithContext("field", "LogDirectory").
+				WithContext("value", config.LogDirectory).
+				WithContext("recommendation", "请提供有效的目录路径或留空使用默认值")
 		}
 	}
 
@@ -209,11 +401,18 @@ func validateLogConfig(config *ChunkerConfig) error {
 // ValidateConfig 验证配置的有效性
 func ValidateConfig(config *ChunkerConfig) error {
 	if config == nil {
-		return fmt.Errorf("config cannot be nil")
+		return NewChunkerError(ErrorTypeConfigInvalid, "配置对象不能为空", nil).
+			WithContext("function", "ValidateConfig").
+			WithContext("expected", "non-nil ChunkerConfig").
+			WithContext("actual", "nil")
 	}
 
 	if config.MaxChunkSize < 0 {
-		return fmt.Errorf("MaxChunkSize cannot be negative")
+		return NewChunkerError(ErrorTypeConfigInvalid, "最大块大小不能为负数", nil).
+			WithContext("function", "ValidateConfig").
+			WithContext("field", "MaxChunkSize").
+			WithContext("value", config.MaxChunkSize).
+			WithContext("minimum_allowed", 0)
 	}
 
 	// 验证启用的类型
@@ -226,14 +425,38 @@ func ValidateConfig(config *ChunkerConfig) error {
 
 		for typeName := range config.EnabledTypes {
 			if !validTypes[typeName] {
-				return fmt.Errorf("invalid content type: %s", typeName)
+				var validTypesList []string
+				for vt := range validTypes {
+					validTypesList = append(validTypesList, vt)
+				}
+
+				return NewChunkerError(ErrorTypeConfigInvalid, "无效的内容类型配置", nil).
+					WithContext("function", "ValidateConfig").
+					WithContext("field", "EnabledTypes").
+					WithContext("invalid_type", typeName).
+					WithContext("valid_types", validTypesList).
+					WithContext("recommendation", "请使用有效的内容类型名称")
 			}
 		}
 	}
 
+	// 验证内存限制
+	if config.MemoryLimit < 0 {
+		return NewChunkerError(ErrorTypeConfigInvalid, "内存限制不能为负数", nil).
+			WithContext("function", "ValidateConfig").
+			WithContext("field", "MemoryLimit").
+			WithContext("value", config.MemoryLimit).
+			WithContext("minimum_allowed", 0)
+	}
+
 	// 验证日志配置
 	if err := validateLogConfig(config); err != nil {
-		return err
+		if chunkerErr, ok := err.(*ChunkerError); ok {
+			return chunkerErr
+		}
+		return NewChunkerError(ErrorTypeConfigInvalid, "日志配置验证失败", err).
+			WithContext("function", "ValidateConfig").
+			WithContext("validation_step", "log_config")
 	}
 
 	return nil
@@ -262,6 +485,18 @@ func NewMarkdownChunkerWithConfig(config *ChunkerConfig) *MarkdownChunker {
 
 	// 验证配置
 	if err := ValidateConfig(config); err != nil {
+		// 创建临时日志器来记录配置错误
+		tempLogger := log.NewLogger(&log.Options{
+			Level:      "error",
+			Format:     "console",
+			Directory:  "./logs",
+			TimeLayout: "2006-01-02 15:04:05.000",
+		})
+
+		tempLogger.Errorw("配置验证失败，使用默认配置",
+			"validation_error", err.Error(),
+			"function", "NewMarkdownChunkerWithConfig")
+
 		// 如果配置无效，使用默认配置
 		config = DefaultConfig()
 	}
@@ -307,11 +542,37 @@ func NewMarkdownChunkerWithConfig(config *ChunkerConfig) *MarkdownChunker {
 
 	logger := log.NewLogger(opts)
 
+	// 创建错误处理器并设置日志器
+	errorHandler := NewDefaultErrorHandler(config.ErrorHandling)
+	errorHandler.SetLogger(logger)
+
+	// 创建性能监控器并设置日志器
+	performanceMonitor := NewPerformanceMonitor()
+	performanceMonitor.SetLogger(logger)
+
+	// 创建内存优化器并设置日志器（如果启用）
+	var memoryOptimizer *MemoryOptimizer
+	if config.EnableObjectPooling || config.MemoryLimit > 0 {
+		memoryOptimizer = NewMemoryOptimizer(config.MemoryLimit)
+		memoryOptimizer.SetLogger(logger)
+
+		logger.Infow("内存优化器已启用",
+			"memory_limit_bytes", config.MemoryLimit,
+			"memory_limit_mb", config.MemoryLimit/(1024*1024),
+			"object_pooling_enabled", config.EnableObjectPooling,
+			"function", "NewMarkdownChunkerWithConfig")
+	}
+
+	// 创建优化的字符串操作
+	stringOps := NewOptimizedStringOperations()
+
 	return &MarkdownChunker{
 		md:                 md,
 		config:             config,
-		errorHandler:       NewDefaultErrorHandler(config.ErrorHandling),
-		performanceMonitor: NewPerformanceMonitor(),
+		errorHandler:       errorHandler,
+		performanceMonitor: performanceMonitor,
+		memoryOptimizer:    memoryOptimizer,
+		stringOps:          stringOps,
 		chunks:             []Chunk{},
 		logger:             logger,
 	}
@@ -319,10 +580,11 @@ func NewMarkdownChunkerWithConfig(config *ChunkerConfig) *MarkdownChunker {
 
 // ChunkDocument 对整个文档进行分块
 func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
+	// 创建日志上下文
+	logCtx := NewLogContext("ChunkDocument").WithDocumentInfo(len(content), 0)
+
 	// 记录文档处理开始日志
-	c.logger.Infow("开始处理 Markdown 文档",
-		"document_size_bytes", len(content),
-		"function", "ChunkDocument")
+	c.logWithContext("info", "开始处理 Markdown 文档", logCtx)
 
 	// 开始性能监控
 	c.performanceMonitor.Start()
@@ -332,13 +594,13 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 		// 获取性能统计信息
 		stats := c.performanceMonitor.GetStats()
 
-		// 记录文档处理结束日志，包含性能信息
-		c.logger.Infow("完成 Markdown 文档处理",
-			"chunk_count", len(c.chunks),
-			"document_size_bytes", len(content),
-			"processing_time_ms", stats.ProcessingTime.Milliseconds(),
-			"memory_used_bytes", stats.MemoryUsed,
-			"function", "ChunkDocument")
+		// 更新日志上下文并记录文档处理结束日志
+		endLogCtx := NewLogContext("ChunkDocument").
+			WithDocumentInfo(len(content), len(c.chunks)).
+			WithProcessTime(stats.ProcessingTime).
+			WithMetadata("memory_used_bytes", stats.MemoryUsed)
+
+		c.logWithContext("info", "完成 Markdown 文档处理", endLogCtx)
 	}()
 
 	// 记录输入文档大小
@@ -349,11 +611,14 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 
 	// 输入验证
 	if content == nil {
-		c.logger.Errorw("输入内容为空",
-			"error", "content cannot be nil",
-			"function", "ChunkDocument")
+		errorLogCtx := NewLogContext("ChunkDocument").WithMetadata("error", "content cannot be nil")
+		c.logWithContext("error", "输入内容为空", errorLogCtx)
 
-		err := NewChunkerError(ErrorTypeInvalidInput, "content cannot be nil", nil)
+		err := NewChunkerError(ErrorTypeInvalidInput, "输入内容不能为空", nil).
+			WithContext("function", "ChunkDocument").
+			WithContext("validation_step", "input_check").
+			WithContext("expected", "non-nil byte slice").
+			WithContext("actual", "nil")
 		if handlerErr := c.errorHandler.HandleError(err); handlerErr != nil {
 			return nil, handlerErr
 		}
@@ -362,21 +627,27 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 
 	// 记录空文档处理
 	if len(content) == 0 {
-		c.logger.Infow("处理空文档",
-			"function", "ChunkDocument")
+		emptyLogCtx := NewLogContext("ChunkDocument").WithDocumentInfo(0, 0)
+		c.logWithContext("info", "处理空文档", emptyLogCtx)
 		return []Chunk{}, nil
 	}
 
 	// 检查内容大小
 	if len(content) > 100*1024*1024 { // 100MB 限制
-		c.logger.Errorw("文档大小超过限制",
-			"document_size_bytes", len(content),
-			"size_limit_bytes", 100*1024*1024,
-			"function", "ChunkDocument")
+		sizeErrorLogCtx := NewLogContext("ChunkDocument").
+			WithDocumentInfo(len(content), 0).
+			WithMetadata("size_limit_bytes", 100*1024*1024).
+			WithMetadata("size_limit_mb", 100).
+			WithMetadata("document_size_mb", len(content)/(1024*1024))
+		c.logWithContext("error", "文档大小超过限制", sizeErrorLogCtx)
 
-		err := NewChunkerError(ErrorTypeMemoryExhausted, "content too large", nil).
-			WithContext("size", len(content)).
-			WithContext("limit", 100*1024*1024)
+		err := NewChunkerError(ErrorTypeMemoryExhausted, "文档大小超过系统限制", nil).
+			WithContext("function", "ChunkDocument").
+			WithContext("document_size_bytes", len(content)).
+			WithContext("size_limit_bytes", 100*1024*1024).
+			WithContext("size_limit_mb", 100).
+			WithContext("document_size_mb", len(content)/(1024*1024)).
+			WithContext("recommendation", "请考虑分割文档或增加内存限制")
 		if handlerErr := c.errorHandler.HandleError(err); handlerErr != nil {
 			return nil, handlerErr
 		}
@@ -384,68 +655,116 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 
 	// 记录大型文档处理警告
 	if len(content) > 10*1024*1024 { // 10MB 警告阈值
-		c.logger.Warnw("处理大型文档",
-			"document_size_bytes", len(content),
-			"recommendation", "考虑分批处理以优化性能",
-			"function", "ChunkDocument")
+		largeDocLogCtx := NewLogContext("ChunkDocument").
+			WithDocumentInfo(len(content), 0).
+			WithMetadata("recommendation", "考虑分批处理以优化性能")
+		c.logWithContext("warn", "处理大型文档", largeDocLogCtx)
 	}
 
 	c.source = content
 	c.chunks = []Chunk{}
 
 	// 解析 Markdown
-	c.logger.Debugw("开始解析 Markdown AST",
-		"function", "ChunkDocument")
+	parseLogCtx := NewLogContext("ChunkDocument").WithDocumentInfo(len(content), 0)
+	c.logWithContext("debug", "开始解析 Markdown AST", parseLogCtx)
 
 	reader := text.NewReader(content)
 	doc := c.md.Parser().Parse(reader)
 
-	c.logger.Debugw("Markdown AST 解析完成",
-		"function", "ChunkDocument")
+	// 检查解析结果
+	if doc == nil {
+		parseFailLogCtx := NewLogContext("ChunkDocument").WithDocumentInfo(len(content), 0)
+		c.logWithContext("error", "Markdown AST 解析失败", parseFailLogCtx)
+
+		err := NewChunkerError(ErrorTypeParsingFailed, "Markdown文档解析失败", nil).
+			WithContext("function", "ChunkDocument").
+			WithContext("document_size_bytes", len(content)).
+			WithContext("parser_type", "goldmark").
+			WithContext("content_preview", string(content[:min(500, len(content))])).
+			WithContext("recommendation", "检查Markdown语法是否正确")
+		if handlerErr := c.errorHandler.HandleError(err); handlerErr != nil {
+			return nil, handlerErr
+		}
+		return []Chunk{}, nil
+	}
+
+	parseCompleteLogCtx := NewLogContext("ChunkDocument").WithDocumentInfo(len(content), 0)
+	c.logWithContext("debug", "Markdown AST 解析完成", parseCompleteLogCtx)
 
 	// 遍历顶层节点进行分块
-	c.logger.Debugw("开始遍历 AST 节点进行分块",
-		"function", "ChunkDocument")
+	traverseLogCtx := NewLogContext("ChunkDocument").WithDocumentInfo(len(content), 0)
+	c.logWithContext("debug", "开始遍历 AST 节点进行分块", traverseLogCtx)
 
 	chunkID := 0
 	processedNodes := 0
 
 	for child := doc.FirstChild(); child != nil; child = child.NextSibling() {
 		processedNodes++
-		chunk := c.processNode(child, chunkID)
+
+		// 使用defer和recover来捕获节点处理中的panic
+		var chunk *Chunk
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicLogCtx := NewLogContext("ChunkDocument").
+						WithNodeInfo(child.Kind().String(), chunkID).
+						WithMetadata("processed_nodes", processedNodes).
+						WithMetadata("panic_value", fmt.Sprintf("%v", r))
+					c.logWithContext("error", "节点处理发生panic", panicLogCtx)
+
+					err := NewChunkerError(ErrorTypeParsingFailed, "节点处理过程中发生严重错误", fmt.Errorf("panic: %v", r)).
+						WithContext("function", "ChunkDocument").
+						WithContext("node_id", chunkID).
+						WithContext("processed_nodes", processedNodes).
+						WithContext("panic_value", fmt.Sprintf("%v", r)).
+						WithContext("node_type", child.Kind().String()).
+						WithContext("recovery_action", "跳过当前节点继续处理")
+					c.errorHandler.HandleError(err)
+					chunk = nil // 确保不处理这个块
+				}
+			}()
+
+			chunk = c.processNode(child, chunkID)
+		}()
+
 		if chunk != nil {
 			// 检查类型是否启用
 			if !c.isTypeEnabled(chunk.Type) {
-				c.logger.Debugw("跳过未启用的块类型",
-					"chunk_type", chunk.Type,
-					"chunk_id", chunkID,
-					"function", "ChunkDocument")
+				skipTypeLogCtx := NewLogContext("ChunkDocument").
+					WithNodeInfo(chunk.Type, chunkID).
+					WithMetadata("chunk_type", chunk.Type)
+				c.logWithContext("debug", "跳过未启用的块类型", skipTypeLogCtx)
 				continue
 			}
 
 			// 检查是否过滤空块
 			if c.config.FilterEmptyChunks && strings.TrimSpace(chunk.Text) == "" {
-				c.logger.Debugw("过滤空块",
-					"chunk_type", chunk.Type,
-					"chunk_id", chunkID,
-					"function", "ChunkDocument")
+				filterEmptyLogCtx := NewLogContext("ChunkDocument").
+					WithNodeInfo(chunk.Type, chunkID).
+					WithMetadata("chunk_type", chunk.Type)
+				c.logWithContext("debug", "过滤空块", filterEmptyLogCtx)
 				continue
 			}
 
 			// 检查块大小限制
 			if c.config.MaxChunkSize > 0 && len(chunk.Content) > c.config.MaxChunkSize {
-				c.logger.Warnw("块大小超过限制",
-					"chunk_size", len(chunk.Content),
-					"max_size", c.config.MaxChunkSize,
-					"chunk_type", chunk.Type,
-					"chunk_id", chunk.ID,
-					"function", "ChunkDocument")
+				oversizeLogCtx := NewLogContext("ChunkDocument").
+					WithNodeInfo(chunk.Type, chunk.ID).
+					WithMetadata("chunk_size", len(chunk.Content)).
+					WithMetadata("max_size", c.config.MaxChunkSize).
+					WithMetadata("size_ratio", float64(len(chunk.Content))/float64(c.config.MaxChunkSize))
+				c.logWithContext("warn", "块大小超过限制", oversizeLogCtx)
 
-				err := NewChunkerError(ErrorTypeChunkTooLarge, "chunk size exceeds maximum", nil).
-					WithContext("chunk_size", len(chunk.Content)).
-					WithContext("max_size", c.config.MaxChunkSize).
+				err := NewChunkerError(ErrorTypeChunkTooLarge, "生成的块大小超过配置限制", nil).
+					WithContext("function", "ChunkDocument").
+					WithContext("chunk_id", chunk.ID).
 					WithContext("chunk_type", chunk.Type).
-					WithContext("chunk_id", chunk.ID)
+					WithContext("chunk_size_bytes", len(chunk.Content)).
+					WithContext("max_size_bytes", c.config.MaxChunkSize).
+					WithContext("size_ratio", float64(len(chunk.Content))/float64(c.config.MaxChunkSize)).
+					WithContext("content_preview", chunk.Content[:min(100, len(chunk.Content))]).
+					WithContext("handling_mode", c.config.ErrorHandling).
+					WithContext("recommendation", "考虑增加MaxChunkSize或启用内容截断")
 
 				if handlerErr := c.errorHandler.HandleError(err); handlerErr != nil {
 					return nil, handlerErr
@@ -453,12 +772,11 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 
 				// 在宽松模式下截断内容
 				if c.config.ErrorHandling != ErrorModeStrict {
-					c.logger.Infow("截断超大块内容",
-						"original_size", len(chunk.Content),
-						"truncated_size", c.config.MaxChunkSize,
-						"chunk_type", chunk.Type,
-						"chunk_id", chunk.ID,
-						"function", "ChunkDocument")
+					truncateLogCtx := NewLogContext("ChunkDocument").
+						WithNodeInfo(chunk.Type, chunk.ID).
+						WithMetadata("original_size", len(chunk.Content)).
+						WithMetadata("truncated_size", c.config.MaxChunkSize)
+					c.logWithContext("info", "截断超大块内容", truncateLogCtx)
 
 					chunk.Content = chunk.Content[:c.config.MaxChunkSize]
 					chunk.Text = chunk.Text[:min(len(chunk.Text), c.config.MaxChunkSize)]
@@ -479,29 +797,80 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 			c.performanceMonitor.RecordChunk(chunk)
 
 			// 记录成功处理的块
-			c.logger.Debugw("成功处理块",
-				"chunk_type", chunk.Type,
-				"chunk_id", chunk.ID,
-				"content_size", len(chunk.Content),
-				"text_size", len(chunk.Text),
-				"function", "ChunkDocument")
+			successChunkLogCtx := NewLogContext("ChunkDocument").
+				WithNodeInfo(chunk.Type, chunk.ID).
+				WithContentInfo(len(chunk.Content), len(chunk.Text), len(strings.Fields(chunk.Text)))
+			c.logWithContext("debug", "成功处理块", successChunkLogCtx)
 
 			chunkID++
 		}
 
 		// 每处理100个节点记录一次进度（用于大型文档）
 		if processedNodes%100 == 0 && len(content) > 1024*1024 { // 只对大于1MB的文档记录进度
-			c.logger.Infow("文档处理进度",
-				"processed_nodes", processedNodes,
-				"generated_chunks", len(c.chunks),
-				"function", "ChunkDocument")
+			// 检查内存使用情况
+			c.performanceMonitor.CheckMemoryThresholds()
+
+			// 如果启用了内存优化器，检查内存限制
+			if c.memoryOptimizer != nil {
+				if err := c.memoryOptimizer.CheckMemoryLimit(); err != nil {
+					memoryErrorLogCtx := NewLogContext("ChunkDocument").
+						WithDocumentInfo(len(content), len(c.chunks)).
+						WithMetadata("processed_nodes", processedNodes).
+						WithMetadata("error", err.Error())
+					c.logWithContext("warn", "内存限制检查失败", memoryErrorLogCtx)
+
+					// 在宽松模式下，尝试强制GC并继续
+					if c.config.ErrorHandling != ErrorModeStrict {
+						c.memoryOptimizer.ForceGC()
+					} else {
+						return nil, err
+					}
+				}
+
+				// 记录已处理的字节数（用于GC触发）
+				c.memoryOptimizer.RecordProcessedBytes(int64(len(content)) / 100) // 分摊到每100个节点
+			}
+
+			progressLogCtx := NewLogContext("ChunkDocument").
+				WithDocumentInfo(len(content), len(c.chunks)).
+				WithMetadata("processed_nodes", processedNodes).
+				WithMetadata("document_size_mb", len(content)/(1024*1024)).
+				WithMetadata("progress_percentage", float64(processedNodes*100)/float64(len(content)/1000))
+			c.logWithContext("info", "文档处理进度", progressLogCtx)
 		}
 	}
 
-	c.logger.Debugw("完成 AST 节点遍历",
-		"total_processed_nodes", processedNodes,
-		"generated_chunks", len(c.chunks),
-		"function", "ChunkDocument")
+	completeTraverseLogCtx := NewLogContext("ChunkDocument").
+		WithDocumentInfo(len(content), len(c.chunks)).
+		WithMetadata("total_processed_nodes", processedNodes)
+	c.logWithContext("debug", "完成 AST 节点遍历", completeTraverseLogCtx)
+
+	// 最终的资源使用情况检查和报告
+	if c.memoryOptimizer != nil {
+		// 检查最终内存状态
+		if err := c.memoryOptimizer.CheckMemoryLimit(); err != nil {
+			finalMemoryLogCtx := NewLogContext("ChunkDocument").
+				WithDocumentInfo(len(content), len(c.chunks)).
+				WithMetadata("error", err.Error()).
+				WithMetadata("recommendation", "考虑在后续处理中释放资源")
+			c.logWithContext("warn", "处理完成时内存使用仍然较高", finalMemoryLogCtx)
+		}
+
+		// 获取内存优化器统计信息
+		memStats := c.memoryOptimizer.GetMemoryStats()
+		memStatsLogCtx := NewLogContext("ChunkDocument").
+			WithDocumentInfo(len(content), len(c.chunks)).
+			WithMetadata("current_memory_mb", memStats.CurrentMemory/(1024*1024)).
+			WithMetadata("memory_limit_mb", memStats.MemoryLimit/(1024*1024)).
+			WithMetadata("processed_bytes_mb", memStats.ProcessedBytes/(1024*1024)).
+			WithMetadata("gc_threshold_mb", memStats.GCThreshold/(1024*1024)).
+			WithMetadata("total_allocations_mb", memStats.TotalAllocations/(1024*1024)).
+			WithMetadata("gc_cycles", memStats.GCCycles)
+		c.logWithContext("info", "内存优化器统计", memStatsLogCtx)
+	}
+
+	// 最终性能检查
+	c.performanceMonitor.CheckMemoryThresholds()
 
 	return c.chunks, nil
 }
@@ -553,36 +922,81 @@ func (c *MarkdownChunker) ResetPerformanceMonitor() {
 
 // processNode 处理单个 AST 节点
 func (c *MarkdownChunker) processNode(node ast.Node, id int) *Chunk {
+	// 获取节点类型名称
+	nodeType := node.Kind().String()
+
+	// 创建节点处理日志上下文
+	nodeLogCtx := NewLogContext("processNode").WithNodeInfo(nodeType, id)
+
+	// 记录节点处理开始日志
+	c.logWithContext("debug", "开始处理 AST 节点", nodeLogCtx)
+
+	var chunk *Chunk
+
 	switch n := node.(type) {
 	case *ast.Heading:
-		return c.processHeading(n, id)
+		chunk = c.processHeading(n, id)
 	case *ast.Paragraph:
-		return c.processParagraph(n, id)
+		chunk = c.processParagraph(n, id)
 	case *ast.FencedCodeBlock:
-		return c.processCodeBlock(n, id)
+		chunk = c.processCodeBlock(n, id)
 	case *ast.CodeBlock:
-		return c.processCodeBlock(n, id)
+		chunk = c.processCodeBlock(n, id)
 	case *extast.Table:
-		return c.processTable(n, id)
+		chunk = c.processTable(n, id)
 	case *ast.List:
-		return c.processList(n, id)
+		chunk = c.processList(n, id)
 	case *ast.Blockquote:
-		return c.processBlockquote(n, id)
+		chunk = c.processBlockquote(n, id)
 	case *ast.ThematicBreak:
-		return c.processThematicBreak(n, id)
+		chunk = c.processThematicBreak(n, id)
 	default:
+		skipLogCtx := NewLogContext("processNode").WithNodeInfo(nodeType, id)
+		c.logWithContext("debug", "跳过不支持的节点类型", skipLogCtx)
 		return nil
 	}
+
+	// 记录节点处理结果日志
+	if chunk != nil {
+		successLogCtx := NewLogContext("processNode").
+			WithNodeInfo(nodeType, id).
+			WithMetadata("chunk_type", chunk.Type).
+			WithContentInfo(len(chunk.Content), len(chunk.Text), len(strings.Fields(chunk.Text)))
+		c.logWithContext("debug", "成功处理 AST 节点", successLogCtx)
+	} else {
+		nullLogCtx := NewLogContext("processNode").WithNodeInfo(nodeType, id)
+		c.logWithContext("debug", "节点处理返回空块", nullLogCtx)
+	}
+
+	return chunk
 }
 
 // processHeading 处理标题
 func (c *MarkdownChunker) processHeading(heading *ast.Heading, id int) *Chunk {
+	// 创建标题处理日志上下文
+	headingLogCtx := NewLogContext("processHeading").
+		WithNodeInfo("Heading", id).
+		WithHeadingInfo(heading.Level, 0) // wordCount will be updated later
+
+	c.logWithContext("debug", "处理标题节点", headingLogCtx)
+
 	content := c.getNodeRawContent(heading)
 	text := c.getNodeText(heading)
 	position := c.calculatePosition(heading)
 	links := c.extractLinks(heading)
 	images := c.extractImages(heading)
 	hash := c.calculateContentHash(content)
+
+	// 记录提取的内容统计信息
+	wordCount := len(strings.Fields(text))
+	completeLogCtx := NewLogContext("processHeading").
+		WithNodeInfo("Heading", id).
+		WithHeadingInfo(heading.Level, wordCount).
+		WithContentInfo(len(content), len(text), wordCount).
+		WithPositionInfo(position.StartLine, position.EndLine, position.StartCol, position.EndCol).
+		WithLinksAndImages(len(links), len(images))
+
+	c.logWithContext("debug", "标题内容提取完成", completeLogCtx)
 
 	return &Chunk{
 		ID:       id,
@@ -604,11 +1018,17 @@ func (c *MarkdownChunker) processHeading(heading *ast.Heading, id int) *Chunk {
 
 // processParagraph 处理段落
 func (c *MarkdownChunker) processParagraph(para *ast.Paragraph, id int) *Chunk {
+	// 创建段落处理日志上下文
+	paraLogCtx := NewLogContext("processParagraph").WithNodeInfo("Paragraph", id)
+	c.logWithContext("debug", "处理段落节点", paraLogCtx)
+
 	content := c.getNodeRawContent(para)
 	text := c.getNodeText(para)
 
 	// 过滤掉空段落
 	if strings.TrimSpace(text) == "" {
+		emptyParaLogCtx := NewLogContext("processParagraph").WithNodeInfo("Paragraph", id)
+		c.logWithContext("debug", "跳过空段落", emptyParaLogCtx)
 		return nil
 	}
 
@@ -616,6 +1036,17 @@ func (c *MarkdownChunker) processParagraph(para *ast.Paragraph, id int) *Chunk {
 	links := c.extractLinks(para)
 	images := c.extractImages(para)
 	hash := c.calculateContentHash(content)
+
+	// 记录提取的内容统计信息
+	wordCount := len(strings.Fields(text))
+	completeParaLogCtx := NewLogContext("processParagraph").
+		WithNodeInfo("Paragraph", id).
+		WithContentInfo(len(content), len(text), wordCount).
+		WithPositionInfo(position.StartLine, position.EndLine, position.StartCol, position.EndCol).
+		WithLinksAndImages(len(links), len(images)).
+		WithMetadata("char_count", len(text))
+
+	c.logWithContext("debug", "段落内容提取完成", completeParaLogCtx)
 
 	return &Chunk{
 		ID:       id,
@@ -636,6 +1067,19 @@ func (c *MarkdownChunker) processParagraph(para *ast.Paragraph, id int) *Chunk {
 
 // processCodeBlock 处理代码块
 func (c *MarkdownChunker) processCodeBlock(code ast.Node, id int) *Chunk {
+	// 确定代码块类型
+	codeBlockType := "indented"
+	if _, ok := code.(*ast.FencedCodeBlock); ok {
+		codeBlockType = "fenced"
+	}
+
+	// 创建代码块处理日志上下文
+	codeLogCtx := NewLogContext("processCodeBlock").
+		WithNodeInfo("CodeBlock", id).
+		WithCodeInfo("", 0, codeBlockType) // language and lineCount will be updated later
+
+	c.logWithContext("debug", "处理代码块节点", codeLogCtx)
+
 	var language string
 	content := c.getNodeRawContent(code)
 
@@ -647,6 +1091,7 @@ func (c *MarkdownChunker) processCodeBlock(code ast.Node, id int) *Chunk {
 	}
 
 	// 去除尾部的空行
+	originalLineCount := len(codeLines)
 	for len(codeLines) > 0 && strings.TrimSpace(codeLines[len(codeLines)-1]) == "" {
 		codeLines = codeLines[:len(codeLines)-1]
 	}
@@ -675,6 +1120,18 @@ func (c *MarkdownChunker) processCodeBlock(code ast.Node, id int) *Chunk {
 	images := c.extractImages(code)
 	hash := c.calculateContentHash(content)
 
+	// 记录提取的内容统计信息
+	completeCodeLogCtx := NewLogContext("processCodeBlock").
+		WithNodeInfo("CodeBlock", id).
+		WithCodeInfo(language, lineCount, codeBlockType).
+		WithContentInfo(len(content), len(text), 0). // code blocks don't have meaningful word count
+		WithPositionInfo(position.StartLine, position.EndLine, position.StartCol, position.EndCol).
+		WithLinksAndImages(len(links), len(images)).
+		WithMetadata("original_line_count", originalLineCount).
+		WithMetadata("cleaned_line_count", lineCount)
+
+	c.logWithContext("debug", "代码块内容提取完成", completeCodeLogCtx)
+
 	return &Chunk{
 		ID:       id,
 		Type:     "code",
@@ -694,6 +1151,10 @@ func (c *MarkdownChunker) processCodeBlock(code ast.Node, id int) *Chunk {
 
 // processTable 处理表格
 func (c *MarkdownChunker) processTable(table *extast.Table, id int) *Chunk {
+	// 创建表格处理日志上下文
+	tableLogCtx := NewLogContext("processTable").WithNodeInfo("Table", id)
+	c.logWithContext("debug", "处理表格节点", tableLogCtx)
+
 	content := c.getNodeRawContent(table)
 	text := c.getNodeText(table)
 
@@ -706,9 +1167,21 @@ func (c *MarkdownChunker) processTable(table *extast.Table, id int) *Chunk {
 
 	// 如果表格格式有问题，记录错误
 	if !tableInfo.IsWellFormed && len(tableInfo.Errors) > 0 {
-		err := NewChunkerError(ErrorTypeParsingFailed, "table format issues detected", nil).
+		errorTableLogCtx := NewLogContext("processTable").
+			WithNodeInfo("Table", id).
+			WithMetadata("table_errors", strings.Join(tableInfo.Errors, "; "))
+		c.logWithContext("debug", "检测到表格格式问题", errorTableLogCtx)
+
+		err := NewChunkerError(ErrorTypeParsingFailed, "表格格式解析存在问题", nil).
+			WithContext("function", "processTable").
+			WithContext("chunk_id", id).
+			WithContext("chunk_type", "table").
 			WithContext("table_errors", strings.Join(tableInfo.Errors, "; ")).
-			WithContext("chunk_id", id)
+			WithContext("error_count", len(tableInfo.Errors)).
+			WithContext("is_well_formed", tableInfo.IsWellFormed).
+			WithContext("table_metadata", tableInfo.GetTableMetadata()).
+			WithContext("content_preview", content[:min(200, len(content))]).
+			WithContext("recommendation", "检查表格的Markdown语法格式")
 		c.errorHandler.HandleError(err)
 	}
 
@@ -716,6 +1189,30 @@ func (c *MarkdownChunker) processTable(table *extast.Table, id int) *Chunk {
 	links := c.extractLinks(table)
 	images := c.extractImages(table)
 	hash := c.calculateContentHash(content)
+
+	// 记录提取的内容统计信息
+	// 解析行数和列数
+	rowCount := 0
+	columnCount := 0
+	if rowCountStr, ok := metadata["row_count"]; ok {
+		if rc, err := fmt.Sscanf(rowCountStr, "%d", &rowCount); err == nil && rc == 1 {
+			// rowCount parsed successfully
+		}
+	}
+	if columnCountStr, ok := metadata["column_count"]; ok {
+		if cc, err := fmt.Sscanf(columnCountStr, "%d", &columnCount); err == nil && cc == 1 {
+			// columnCount parsed successfully
+		}
+	}
+
+	completeTableLogCtx := NewLogContext("processTable").
+		WithNodeInfo("Table", id).
+		WithTableInfo(rowCount, columnCount, tableInfo.IsWellFormed).
+		WithContentInfo(len(content), len(text), len(strings.Fields(text))).
+		WithPositionInfo(position.StartLine, position.EndLine, position.StartCol, position.EndCol).
+		WithLinksAndImages(len(links), len(images))
+
+	c.logWithContext("debug", "表格内容提取完成", completeTableLogCtx)
 
 	return &Chunk{
 		ID:       id,
@@ -733,13 +1230,20 @@ func (c *MarkdownChunker) processTable(table *extast.Table, id int) *Chunk {
 
 // processList 处理列表
 func (c *MarkdownChunker) processList(list *ast.List, id int) *Chunk {
-	content := c.getNodeRawContent(list)
-	text := c.getListText(list)
-
 	listType := "unordered"
 	if list.IsOrdered() {
 		listType = "ordered"
 	}
+
+	// 创建列表处理日志上下文
+	listLogCtx := NewLogContext("processList").
+		WithNodeInfo("List", id).
+		WithListInfo(listType, 0) // itemCount will be updated later
+
+	c.logWithContext("debug", "处理列表节点", listLogCtx)
+
+	content := c.getNodeRawContent(list)
+	text := c.getListText(list)
 
 	// 计算列表项数量
 	itemCount := 0
@@ -753,6 +1257,16 @@ func (c *MarkdownChunker) processList(list *ast.List, id int) *Chunk {
 	links := c.extractLinks(list)
 	images := c.extractImages(list)
 	hash := c.calculateContentHash(content)
+
+	// 记录提取的内容统计信息
+	completeListLogCtx := NewLogContext("processList").
+		WithNodeInfo("List", id).
+		WithListInfo(listType, itemCount).
+		WithContentInfo(len(content), len(text), len(strings.Fields(text))).
+		WithPositionInfo(position.StartLine, position.EndLine, position.StartCol, position.EndCol).
+		WithLinksAndImages(len(links), len(images))
+
+	c.logWithContext("debug", "列表内容提取完成", completeListLogCtx)
 
 	return &Chunk{
 		ID:       id,
@@ -787,6 +1301,10 @@ func (c *MarkdownChunker) getListText(list *ast.List) string {
 
 // processBlockquote 处理引用块
 func (c *MarkdownChunker) processBlockquote(quote *ast.Blockquote, id int) *Chunk {
+	// 创建引用块处理日志上下文
+	quoteLogCtx := NewLogContext("processBlockquote").WithNodeInfo("Blockquote", id)
+	c.logWithContext("debug", "处理引用块节点", quoteLogCtx)
+
 	content := c.getNodeRawContent(quote)
 	text := c.getNodeText(quote)
 
@@ -794,6 +1312,16 @@ func (c *MarkdownChunker) processBlockquote(quote *ast.Blockquote, id int) *Chun
 	links := c.extractLinks(quote)
 	images := c.extractImages(quote)
 	hash := c.calculateContentHash(content)
+
+	// 记录提取的内容统计信息
+	wordCount := len(strings.Fields(text))
+	completeQuoteLogCtx := NewLogContext("processBlockquote").
+		WithNodeInfo("Blockquote", id).
+		WithContentInfo(len(content), len(text), wordCount).
+		WithPositionInfo(position.StartLine, position.EndLine, position.StartCol, position.EndCol).
+		WithLinksAndImages(len(links), len(images))
+
+	c.logWithContext("debug", "引用块内容提取完成", completeQuoteLogCtx)
 
 	return &Chunk{
 		ID:       id,
@@ -813,12 +1341,25 @@ func (c *MarkdownChunker) processBlockquote(quote *ast.Blockquote, id int) *Chun
 
 // processThematicBreak 处理分隔线
 func (c *MarkdownChunker) processThematicBreak(hr *ast.ThematicBreak, id int) *Chunk {
+	// 创建分隔线处理日志上下文
+	hrLogCtx := NewLogContext("processThematicBreak").WithNodeInfo("ThematicBreak", id)
+	c.logWithContext("debug", "处理分隔线节点", hrLogCtx)
+
 	content := c.getNodeRawContent(hr)
 
 	position := c.calculatePosition(hr)
 	links := c.extractLinks(hr)
 	images := c.extractImages(hr)
 	hash := c.calculateContentHash(content)
+
+	// 记录提取的内容统计信息
+	completeHrLogCtx := NewLogContext("processThematicBreak").
+		WithNodeInfo("ThematicBreak", id).
+		WithContentInfo(len(content), 3, 0). // ThematicBreak has fixed text "---"
+		WithPositionInfo(position.StartLine, position.EndLine, position.StartCol, position.EndCol).
+		WithLinksAndImages(len(links), len(images))
+
+	c.logWithContext("debug", "分隔线内容提取完成", completeHrLogCtx)
 
 	return &Chunk{
 		ID:       id,

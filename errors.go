@@ -2,8 +2,12 @@ package markdownchunker
 
 import (
 	"fmt"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/kydenul/log"
 )
 
 // ErrorType 错误类型
@@ -100,6 +104,7 @@ type DefaultErrorHandler struct {
 	errors []ChunkerError
 	mode   ErrorHandlingMode
 	mutex  sync.RWMutex
+	logger log.Logger // 日志器实例
 }
 
 // NewDefaultErrorHandler 创建默认错误处理器
@@ -107,6 +112,70 @@ func NewDefaultErrorHandler(mode ErrorHandlingMode) *DefaultErrorHandler {
 	return &DefaultErrorHandler{
 		errors: make([]ChunkerError, 0),
 		mode:   mode,
+		logger: nil, // 将在 SetLogger 中设置
+	}
+}
+
+// NewDefaultErrorHandlerWithLogger 创建带日志器的默认错误处理器
+func NewDefaultErrorHandlerWithLogger(mode ErrorHandlingMode, logger log.Logger) *DefaultErrorHandler {
+	return &DefaultErrorHandler{
+		errors: make([]ChunkerError, 0),
+		mode:   mode,
+		logger: logger,
+	}
+}
+
+// SetLogger 设置日志器
+func (h *DefaultErrorHandler) SetLogger(logger log.Logger) {
+	h.logger = logger
+}
+
+// getStackTrace 获取堆栈跟踪信息
+func getStackTrace(skip int) []string {
+	var traces []string
+	for i := skip; i < skip+10; i++ { // 获取最多10层堆栈
+		pc, file, line, ok := runtime.Caller(i)
+		if !ok {
+			break
+		}
+
+		fn := runtime.FuncForPC(pc)
+		if fn == nil {
+			continue
+		}
+
+		// 只保留相对路径和函数名
+		funcName := fn.Name()
+		if idx := strings.LastIndex(funcName, "/"); idx >= 0 {
+			funcName = funcName[idx+1:]
+		}
+
+		if idx := strings.LastIndex(file, "/"); idx >= 0 {
+			file = file[idx+1:]
+		}
+
+		traces = append(traces, fmt.Sprintf("%s:%d %s", file, line, funcName))
+	}
+	return traces
+}
+
+// getLogLevelForErrorType 根据错误类型确定日志级别
+func getLogLevelForErrorType(errorType ErrorType) string {
+	switch errorType {
+	case ErrorTypeInvalidInput:
+		return "warn" // 输入错误通常是警告级别
+	case ErrorTypeParsingFailed:
+		return "error" // 解析失败是错误级别
+	case ErrorTypeMemoryExhausted:
+		return "error" // 内存不足是严重错误
+	case ErrorTypeTimeout:
+		return "error" // 超时是错误级别
+	case ErrorTypeConfigInvalid:
+		return "warn" // 配置错误通常是警告级别
+	case ErrorTypeChunkTooLarge:
+		return "warn" // 块过大通常是警告级别
+	default:
+		return "error" // 未知错误默认为错误级别
 	}
 }
 
@@ -116,6 +185,11 @@ func (h *DefaultErrorHandler) HandleError(err *ChunkerError) error {
 	h.mutex.Lock()
 	h.errors = append(h.errors, *err)
 	h.mutex.Unlock()
+
+	// 如果有日志器，记录详细的错误日志
+	if h.logger != nil {
+		h.logError(err)
+	}
 
 	switch h.mode {
 	case ErrorModeStrict:
@@ -129,6 +203,77 @@ func (h *DefaultErrorHandler) HandleError(err *ChunkerError) error {
 		return nil
 	default:
 		return err
+	}
+}
+
+// logError 记录详细的错误日志
+func (h *DefaultErrorHandler) logError(err *ChunkerError) {
+	// 获取堆栈跟踪信息
+	stackTrace := getStackTrace(3) // 跳过当前函数和调用链
+
+	// 确定日志级别
+	logLevel := getLogLevelForErrorType(err.Type)
+
+	// 构建日志参数
+	logArgs := []interface{}{
+		"error_type", err.Type.String(),
+		"error_message", err.Message,
+		"error_timestamp", err.Timestamp,
+		"function", "HandleError",
+	}
+
+	// 添加上下文信息
+	if len(err.Context) > 0 {
+		for key, value := range err.Context {
+			logArgs = append(logArgs, fmt.Sprintf("context_%s", key), value)
+		}
+	}
+
+	// 添加原因错误信息
+	if err.Cause != nil {
+		logArgs = append(logArgs, "cause_error", err.Cause.Error())
+	}
+
+	// 添加堆栈跟踪信息（仅在DEBUG级别）
+	if len(stackTrace) > 0 {
+		logArgs = append(logArgs, "stack_trace", stackTrace)
+	}
+
+	// 根据错误类型和日志级别记录日志
+	switch logLevel {
+	case "warn":
+		h.logger.Warnw("错误处理器捕获警告", logArgs...)
+	case "error":
+		h.logger.Errorw("错误处理器捕获错误", logArgs...)
+	default:
+		h.logger.Errorw("错误处理器捕获未知级别错误", logArgs...)
+	}
+
+	// 如果是严重错误，额外记录错误统计信息
+	if err.Type == ErrorTypeMemoryExhausted || err.Type == ErrorTypeTimeout {
+		h.mutex.RLock()
+		errorCount := len(h.errors)
+		h.mutex.RUnlock()
+
+		h.logger.Errorw("检测到严重错误",
+			"error_type", err.Type.String(),
+			"total_error_count", errorCount,
+			"handling_mode", h.getHandlingModeString(),
+			"function", "HandleError")
+	}
+}
+
+// getHandlingModeString 获取错误处理模式的字符串表示
+func (h *DefaultErrorHandler) getHandlingModeString() string {
+	switch h.mode {
+	case ErrorModeStrict:
+		return "strict"
+	case ErrorModePermissive:
+		return "permissive"
+	case ErrorModeSilent:
+		return "silent"
+	default:
+		return "unknown"
 	}
 }
 
