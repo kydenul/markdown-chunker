@@ -62,15 +62,15 @@ type Chunk struct {
 
 // LogContext 表示日志上下文信息
 type LogContext struct {
-	FunctionName string                 `json:"function_name"` // 函数名
-	FileName     string                 `json:"file_name"`     // 文件名
-	LineNumber   int                    `json:"line_number"`   // 行号
-	NodeType     string                 `json:"node_type"`     // 节点类型
-	NodeID       int                    `json:"node_id"`       // 节点ID
-	ChunkCount   int                    `json:"chunk_count"`   // 块数量
-	DocumentSize int                    `json:"document_size"` // 文档大小
-	ProcessTime  time.Duration          `json:"process_time"`  // 处理时间
-	Metadata     map[string]interface{} `json:"metadata"`      // 额外元数据
+	FunctionName string         `json:"function_name"` // 函数名
+	FileName     string         `json:"file_name"`     // 文件名
+	LineNumber   int            `json:"line_number"`   // 行号
+	NodeType     string         `json:"node_type"`     // 节点类型
+	NodeID       int            `json:"node_id"`       // 节点ID
+	ChunkCount   int            `json:"chunk_count"`   // 块数量
+	DocumentSize int            `json:"document_size"` // 文档大小
+	ProcessTime  time.Duration  `json:"process_time"`  // 处理时间
+	Metadata     map[string]any `json:"metadata"`      // 额外元数据
 }
 
 // ErrorHandlingMode 错误处理模式
@@ -125,7 +125,7 @@ func NewLogContext(functionName string) *LogContext {
 		FunctionName: functionName,
 		FileName:     fileName,
 		LineNumber:   lineNumber,
-		Metadata:     make(map[string]interface{}),
+		Metadata:     make(map[string]any),
 	}
 }
 
@@ -137,7 +137,7 @@ func (lc *LogContext) WithNodeInfo(nodeType string, nodeID int) *LogContext {
 }
 
 // WithDocumentInfo 添加文档信息到日志上下文
-func (lc *LogContext) WithDocumentInfo(documentSize int, chunkCount int) *LogContext {
+func (lc *LogContext) WithDocumentInfo(documentSize, chunkCount int) *LogContext {
 	lc.DocumentSize = documentSize
 	lc.ChunkCount = chunkCount
 	return lc
@@ -150,7 +150,7 @@ func (lc *LogContext) WithProcessTime(duration time.Duration) *LogContext {
 }
 
 // WithMetadata 添加自定义元数据到日志上下文
-func (lc *LogContext) WithMetadata(key string, value interface{}) *LogContext {
+func (lc *LogContext) WithMetadata(key string, value any) *LogContext {
 	lc.Metadata[key] = value
 	return lc
 }
@@ -179,7 +179,7 @@ func (lc *LogContext) WithCodeInfo(language string, lineCount int, codeBlockType
 }
 
 // WithHeadingInfo 添加标题特定信息到日志上下文
-func (lc *LogContext) WithHeadingInfo(level int, wordCount int) *LogContext {
+func (lc *LogContext) WithHeadingInfo(level, wordCount int) *LogContext {
 	lc.Metadata["heading_level"] = level
 	lc.Metadata["heading_word_count"] = wordCount
 	return lc
@@ -210,8 +210,8 @@ func (lc *LogContext) WithLinksAndImages(linksCount, imagesCount int) *LogContex
 }
 
 // ToLogFields 将日志上下文转换为日志字段
-func (lc *LogContext) ToLogFields() []interface{} {
-	fields := []interface{}{
+func (lc *LogContext) ToLogFields() []any {
+	fields := []any{
 		"function", lc.FunctionName,
 		"file", lc.FileName,
 		"line", lc.LineNumber,
@@ -242,7 +242,7 @@ func (lc *LogContext) ToLogFields() []interface{} {
 }
 
 // logWithContext 使用上下文信息记录日志的辅助函数
-func (c *MarkdownChunker) logWithContext(level string, message string, context *LogContext) {
+func (c *MarkdownChunker) logWithContext(level, message string, context *LogContext) {
 	fields := context.ToLogFields()
 
 	switch level {
@@ -293,12 +293,19 @@ type ChunkerConfig struct {
 	EnableLog    bool   `json:"enable_log"`    // 是否启用日志
 	LogFormat    string `json:"log_format"`    // 日志格式 (json, console)
 	LogDirectory string `json:"log_directory"` // 日志文件目录
+
+	// 策略配置
+	ChunkingStrategy *StrategyConfig `json:"chunking_strategy,omitempty"` // 分块策略配置
 }
 
 // MarkdownChunker Markdown 分块器
 type MarkdownChunker struct {
 	md                 goldmark.Markdown
 	config             *ChunkerConfig
+	strategy           ChunkingStrategy  // 当前使用的策略
+	strategyRegistry   *StrategyRegistry // 策略注册器
+	strategyCache      *StrategyCache    // 策略缓存
+	strategyPool       *StrategyPool     // 策略实例池
 	errorHandler       ErrorHandler
 	performanceMonitor *PerformanceMonitor
 	memoryOptimizer    *MemoryOptimizer
@@ -321,7 +328,56 @@ func DefaultConfig() *ChunkerConfig {
 		LogLevel:           "INFO",
 		EnableLog:          true,
 		LogFormat:          "console",
-		LogDirectory:       "./logs", // 默认日志目录
+		LogDirectory:       "./logs",             // 默认日志目录
+		ChunkingStrategy:   ElementLevelConfig(), // 默认使用元素级策略
+	}
+}
+
+// EnsureDefaultStrategyConfig 确保配置中有有效的策略配置
+func EnsureDefaultStrategyConfig(config *ChunkerConfig) {
+	if config == nil {
+		return
+	}
+
+	// 如果没有策略配置，设置默认策略
+	if config.ChunkingStrategy == nil {
+		config.ChunkingStrategy = ElementLevelConfig()
+		return
+	}
+
+	// 如果策略名称为空，设置为默认策略
+	if config.ChunkingStrategy.Name == "" {
+		config.ChunkingStrategy = ElementLevelConfig()
+		return
+	}
+
+	// 确保参数映射不为空
+	if config.ChunkingStrategy.Parameters == nil {
+		config.ChunkingStrategy.Parameters = make(map[string]any)
+	}
+
+	// 根据策略类型设置默认参数
+	switch config.ChunkingStrategy.Name {
+	case "hierarchical":
+		// 确保层级策略有合理的默认值
+		if config.ChunkingStrategy.MaxDepth == 0 && config.ChunkingStrategy.MinDepth == 0 {
+			// 如果没有设置层级限制，使用合理的默认值
+			if _, hasMaxDepth := config.ChunkingStrategy.Parameters["max_depth"]; !hasMaxDepth {
+				config.ChunkingStrategy.Parameters["max_depth"] = 0 // 无限制
+			}
+			if _, hasMergeEmpty := config.ChunkingStrategy.Parameters["merge_empty"]; !hasMergeEmpty {
+				config.ChunkingStrategy.Parameters["merge_empty"] = true
+				config.ChunkingStrategy.MergeEmpty = true
+			}
+		}
+
+	case "element-level":
+		// 元素级策略通常不需要特殊参数，但确保参数映射存在
+		// 可以在这里添加元素级策略的默认参数
+
+	case "document-level":
+		// 文档级策略通常不需要特殊参数
+		// 可以在这里添加文档级策略的默认参数
 	}
 }
 
@@ -592,6 +648,38 @@ func ValidateConfig(config *ChunkerConfig) error {
 			WithContext("validation_step", "log_config")
 	}
 
+	// 验证策略配置
+	if config.ChunkingStrategy != nil {
+		tempLogger.Debugw("验证分块策略配置",
+			"function", "ValidateConfig",
+			"strategy_name", config.ChunkingStrategy.Name)
+
+		if err := validateStrategyConfig(config.ChunkingStrategy); err != nil {
+			tempLogger.Errorw("配置验证失败：策略配置无效",
+				"function", "ValidateConfig",
+				"validation_step", "strategy_config",
+				"strategy_name", config.ChunkingStrategy.Name,
+				"error", err.Error(),
+				"error_type", "invalid_strategy_config")
+
+			if chunkerErr, ok := err.(*ChunkerError); ok {
+				return chunkerErr
+			}
+			return NewChunkerError(ErrorTypeConfigInvalid, "策略配置验证失败", err).
+				WithContext("function", "ValidateConfig").
+				WithContext("validation_step", "strategy_config").
+				WithContext("strategy_name", config.ChunkingStrategy.Name)
+		}
+
+		tempLogger.Debugw("策略配置验证通过",
+			"function", "ValidateConfig",
+			"strategy_name", config.ChunkingStrategy.Name)
+	} else {
+		tempLogger.Debugw("未配置分块策略，将使用默认策略",
+			"function", "ValidateConfig",
+			"default_strategy", "element-level")
+	}
+
 	// 记录配置验证成功日志
 	tempLogger.Infow("配置验证成功",
 		"function", "ValidateConfig",
@@ -600,9 +688,746 @@ func ValidateConfig(config *ChunkerConfig) error {
 		"log_level", config.LogLevel,
 		"log_format", config.LogFormat,
 		"log_directory", config.LogDirectory,
+		"strategy_name", func() string {
+			if config.ChunkingStrategy != nil {
+				return config.ChunkingStrategy.Name
+			}
+			return "default"
+		}(),
 		"validation_result", "passed")
 
 	return nil
+}
+
+// validateStrategyConfig 验证策略配置的有效性
+func validateStrategyConfig(config *StrategyConfig) error {
+	// 创建临时日志器用于策略配置验证过程的日志记录
+	tempLogger := log.NewLogger(&log.Options{
+		Level:      "debug",
+		Format:     "console",
+		Directory:  "./logs",
+		TimeLayout: "2006-01-02 15:04:05.000",
+	})
+
+	tempLogger.Debugw("开始策略配置验证",
+		"function", "validateStrategyConfig")
+
+	if config == nil {
+		tempLogger.Errorw("策略配置验证失败：配置对象为空",
+			"function", "validateStrategyConfig",
+			"error_type", "config_null")
+
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "策略配置对象不能为空", nil).
+			WithContext("function", "validateStrategyConfig")
+	}
+
+	// 验证策略名称
+	tempLogger.Debugw("验证策略名称",
+		"function", "validateStrategyConfig",
+		"strategy_name", config.Name)
+
+	if config.Name == "" {
+		tempLogger.Errorw("策略配置验证失败：策略名称为空",
+			"function", "validateStrategyConfig",
+			"field", "Name",
+			"error_type", "empty_strategy_name")
+
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "策略名称不能为空", nil).
+			WithContext("function", "validateStrategyConfig").
+			WithContext("field", "Name")
+	}
+
+	// 验证已知的策略名称
+	validStrategies := map[string]bool{
+		"element-level":  true,
+		"hierarchical":   true,
+		"document-level": true,
+	}
+
+	if !validStrategies[config.Name] {
+		var validStrategiesList []string
+		for strategy := range validStrategies {
+			validStrategiesList = append(validStrategiesList, strategy)
+		}
+
+		tempLogger.Warnw("策略配置验证警告：未知的策略名称",
+			"function", "validateStrategyConfig",
+			"field", "Name",
+			"unknown_strategy", config.Name,
+			"valid_strategies", validStrategiesList,
+			"warning_type", "unknown_strategy_name")
+
+		// 对于未知策略，只记录警告，不返回错误，以支持自定义策略
+	}
+
+	// 使用策略配置自身的验证方法
+	tempLogger.Debugw("执行策略配置通用验证",
+		"function", "validateStrategyConfig",
+		"strategy_name", config.Name)
+
+	if err := config.ValidateConfig(); err != nil {
+		tempLogger.Errorw("策略配置验证失败：通用验证失败",
+			"function", "validateStrategyConfig",
+			"strategy_name", config.Name,
+			"error", err.Error(),
+			"error_type", "generic_validation_failed")
+
+		return err
+	}
+
+	// 策略特定的验证
+	switch config.Name {
+	case "hierarchical":
+		tempLogger.Debugw("执行层级策略特定验证",
+			"function", "validateStrategyConfig",
+			"strategy_name", config.Name,
+			"max_depth", config.MaxDepth,
+			"min_depth", config.MinDepth,
+			"merge_empty", config.MergeEmpty)
+
+		if err := validateHierarchicalStrategyConfig(config); err != nil {
+			tempLogger.Errorw("策略配置验证失败：层级策略验证失败",
+				"function", "validateStrategyConfig",
+				"strategy_name", config.Name,
+				"error", err.Error(),
+				"error_type", "hierarchical_validation_failed")
+			return err
+		}
+
+	case "element-level":
+		tempLogger.Debugw("执行元素级策略特定验证",
+			"function", "validateStrategyConfig",
+			"strategy_name", config.Name)
+
+		if err := validateElementLevelStrategyConfig(config); err != nil {
+			tempLogger.Errorw("策略配置验证失败：元素级策略验证失败",
+				"function", "validateStrategyConfig",
+				"strategy_name", config.Name,
+				"error", err.Error(),
+				"error_type", "element_level_validation_failed")
+			return err
+		}
+
+	case "document-level":
+		tempLogger.Debugw("执行文档级策略特定验证",
+			"function", "validateStrategyConfig",
+			"strategy_name", config.Name)
+
+		if err := validateDocumentLevelStrategyConfig(config); err != nil {
+			tempLogger.Errorw("策略配置验证失败：文档级策略验证失败",
+				"function", "validateStrategyConfig",
+				"strategy_name", config.Name,
+				"error", err.Error(),
+				"error_type", "document_level_validation_failed")
+			return err
+		}
+
+	default:
+		tempLogger.Debugw("跳过未知策略的特定验证",
+			"function", "validateStrategyConfig",
+			"strategy_name", config.Name,
+			"reason", "custom_or_unknown_strategy")
+	}
+
+	// 记录策略配置验证成功
+	tempLogger.Debugw("策略配置验证成功",
+		"function", "validateStrategyConfig",
+		"strategy_name", config.Name,
+		"max_depth", config.MaxDepth,
+		"min_depth", config.MinDepth,
+		"merge_empty", config.MergeEmpty,
+		"min_chunk_size", config.MinChunkSize,
+		"max_chunk_size", config.MaxChunkSize,
+		"validation_result", "passed")
+
+	return nil
+}
+
+// validateHierarchicalStrategyConfig 验证层级策略特定配置
+func validateHierarchicalStrategyConfig(config *StrategyConfig) error {
+	if config == nil {
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "层级策略配置不能为空", nil).
+			WithContext("function", "validateHierarchicalStrategyConfig")
+	}
+
+	// 验证层级深度限制
+	if config.MaxDepth > 6 {
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "层级策略最大深度不能超过6", nil).
+			WithContext("function", "validateHierarchicalStrategyConfig").
+			WithContext("field", "MaxDepth").
+			WithContext("value", config.MaxDepth).
+			WithContext("max_allowed", 6).
+			WithContext("recommendation", "Markdown标题最多支持6级")
+	}
+
+	// 验证参数一致性
+	if maxDepthParam, exists := config.Parameters["max_depth"]; exists {
+		if maxDepthInt, ok := maxDepthParam.(int); ok && maxDepthInt != config.MaxDepth {
+			return NewChunkerError(ErrorTypeStrategyConfigInvalid, "参数中的max_depth与配置字段不一致", nil).
+				WithContext("function", "validateHierarchicalStrategyConfig").
+				WithContext("field", "Parameters.max_depth").
+				WithContext("param_value", maxDepthInt).
+				WithContext("config_value", config.MaxDepth).
+				WithContext("recommendation", "确保参数与配置字段保持一致")
+		}
+	}
+
+	return nil
+}
+
+// validateElementLevelStrategyConfig 验证元素级策略特定配置
+func validateElementLevelStrategyConfig(config *StrategyConfig) error {
+	if config == nil {
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "元素级策略配置不能为空", nil).
+			WithContext("function", "validateElementLevelStrategyConfig")
+	}
+
+	// 元素级策略不需要特殊的配置验证，主要依赖通用验证
+	// 但可以检查是否有不适用的配置
+	if config.MaxDepth > 0 || config.MinDepth > 0 {
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "元素级策略不支持层级深度配置", nil).
+			WithContext("function", "validateElementLevelStrategyConfig").
+			WithContext("max_depth", config.MaxDepth).
+			WithContext("min_depth", config.MinDepth).
+			WithContext("recommendation", "元素级策略按元素类型分块，不使用层级信息")
+	}
+
+	return nil
+}
+
+// validateDocumentLevelStrategyConfig 验证文档级策略特定配置
+func validateDocumentLevelStrategyConfig(config *StrategyConfig) error {
+	if config == nil {
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "文档级策略配置不能为空", nil).
+			WithContext("function", "validateDocumentLevelStrategyConfig")
+	}
+
+	// 文档级策略不需要特殊的配置验证
+	// 但可以检查是否有不适用的配置
+	if config.MaxDepth > 0 || config.MinDepth > 0 {
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "文档级策略不支持层级深度配置", nil).
+			WithContext("function", "validateDocumentLevelStrategyConfig").
+			WithContext("max_depth", config.MaxDepth).
+			WithContext("min_depth", config.MinDepth).
+			WithContext("recommendation", "文档级策略将整个文档作为单个块处理")
+	}
+
+	if len(config.IncludeTypes) > 0 || len(config.ExcludeTypes) > 0 {
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "文档级策略不支持内容类型过滤", nil).
+			WithContext("function", "validateDocumentLevelStrategyConfig").
+			WithContext("include_types", config.IncludeTypes).
+			WithContext("exclude_types", config.ExcludeTypes).
+			WithContext("recommendation", "文档级策略处理所有内容类型")
+	}
+
+	return nil
+}
+
+// initializeStrategySystem 初始化策略系统
+func initializeStrategySystem(config *ChunkerConfig, logger log.Logger) (*StrategyRegistry, ChunkingStrategy) {
+	// 创建策略注册器
+	strategyRegistry := NewStrategyRegistry()
+
+	// 注册默认策略并记录结果
+	var elementStrategy ChunkingStrategy
+	var hierarchicalStrategy ChunkingStrategy
+	var documentStrategy ChunkingStrategy
+
+	// 注册元素级策略
+	elementStrategy = NewElementLevelStrategy()
+	if err := strategyRegistry.Register(elementStrategy); err != nil {
+		logger.Errorw("注册元素级策略失败",
+			"function", "initializeStrategySystem",
+			"strategy", "element-level",
+			"error", err.Error())
+		// 创建一个基本的元素级策略作为后备
+		elementStrategy = NewElementLevelStrategy()
+	} else {
+		logger.Debugw("成功注册元素级策略",
+			"function", "initializeStrategySystem",
+			"strategy", "element-level")
+	}
+
+	// 注册层级策略
+	hierarchicalStrategy = NewHierarchicalStrategy()
+	if err := strategyRegistry.Register(hierarchicalStrategy); err != nil {
+		logger.Errorw("注册层级策略失败",
+			"function", "initializeStrategySystem",
+			"strategy", "hierarchical",
+			"error", err.Error())
+	} else {
+		logger.Debugw("成功注册层级策略",
+			"function", "initializeStrategySystem",
+			"strategy", "hierarchical")
+	}
+
+	// 注册文档级策略
+	documentStrategy = NewDocumentLevelStrategy()
+	if err := strategyRegistry.Register(documentStrategy); err != nil {
+		logger.Errorw("注册文档级策略失败",
+			"function", "initializeStrategySystem",
+			"strategy", "document-level",
+			"error", err.Error())
+	} else {
+		logger.Debugw("成功注册文档级策略",
+			"function", "initializeStrategySystem",
+			"strategy", "document-level")
+	}
+
+	// 确定当前使用的策略
+	currentStrategy := determineCurrentStrategy(config, strategyRegistry, elementStrategy, logger)
+
+	// 记录策略系统初始化摘要
+	logger.Infow("策略系统组件初始化完成",
+		"function", "initializeStrategySystem",
+		"registered_strategies_count", strategyRegistry.GetStrategyCount(),
+		"available_strategies", strategyRegistry.List(),
+		"selected_strategy", currentStrategy.GetName(),
+		"fallback_strategy", elementStrategy.GetName())
+
+	return strategyRegistry, currentStrategy
+}
+
+// determineCurrentStrategy 确定当前使用的策略
+func determineCurrentStrategy(config *ChunkerConfig, registry *StrategyRegistry, fallbackStrategy ChunkingStrategy, logger log.Logger) ChunkingStrategy {
+	// 如果没有策略配置，使用默认策略
+	if config.ChunkingStrategy == nil {
+		logger.Infow("未配置策略，使用默认策略",
+			"function", "determineCurrentStrategy",
+			"default_strategy", fallbackStrategy.GetName())
+		return fallbackStrategy.Clone()
+	}
+
+	strategyName := config.ChunkingStrategy.Name
+	logger.Debugw("尝试获取配置的策略",
+		"function", "determineCurrentStrategy",
+		"requested_strategy", strategyName)
+
+	// 尝试从注册器获取策略
+	strategy, err := registry.Get(strategyName)
+	if err != nil {
+		logger.Warnw("获取配置的策略失败，使用默认策略",
+			"function", "determineCurrentStrategy",
+			"requested_strategy", strategyName,
+			"fallback_strategy", fallbackStrategy.GetName(),
+			"error", err.Error(),
+			"available_strategies", registry.List())
+		return fallbackStrategy.Clone()
+	}
+
+	// 克隆策略以确保线程安全
+	clonedStrategy := strategy.Clone()
+	if clonedStrategy == nil {
+		logger.Errorw("策略克隆失败，使用默认策略",
+			"function", "determineCurrentStrategy",
+			"requested_strategy", strategyName,
+			"fallback_strategy", fallbackStrategy.GetName())
+		return fallbackStrategy.Clone()
+	}
+
+	// 如果策略有配置，尝试应用配置
+	if config.ChunkingStrategy != nil {
+		if err := applyStrategyConfig(clonedStrategy, config.ChunkingStrategy, logger); err != nil {
+			logger.Warnw("应用策略配置失败，使用默认配置",
+				"function", "determineCurrentStrategy",
+				"strategy", strategyName,
+				"error", err.Error())
+			// 继续使用策略，但不应用特定配置
+		}
+	}
+
+	logger.Infow("成功确定当前策略",
+		"function", "determineCurrentStrategy",
+		"selected_strategy", clonedStrategy.GetName(),
+		"strategy_description", clonedStrategy.GetDescription())
+
+	return clonedStrategy
+}
+
+// applyStrategyConfig 应用策略特定配置
+func applyStrategyConfig(strategy ChunkingStrategy, config *StrategyConfig, logger log.Logger) error {
+	logger.Debugw("应用策略配置",
+		"function", "applyStrategyConfig",
+		"strategy", strategy.GetName(),
+		"config", config.String())
+
+	// 验证配置是否适用于策略
+	if err := strategy.ValidateConfig(config); err != nil {
+		logger.Errorw("策略配置验证失败",
+			"function", "applyStrategyConfig",
+			"strategy", strategy.GetName(),
+			"error", err.Error())
+		return err
+	}
+
+	// 对于支持配置设置的策略，应用配置
+	switch s := strategy.(type) {
+	case interface{ SetConfig(*StrategyConfig) error }:
+		if err := s.SetConfig(config); err != nil {
+			logger.Errorw("设置策略配置失败",
+				"function", "applyStrategyConfig",
+				"strategy", strategy.GetName(),
+				"error", err.Error())
+			return err
+		}
+		logger.Debugw("成功应用策略配置",
+			"function", "applyStrategyConfig",
+			"strategy", strategy.GetName())
+	default:
+		logger.Debugw("策略不支持配置设置",
+			"function", "applyStrategyConfig",
+			"strategy", strategy.GetName())
+	}
+
+	return nil
+}
+
+// SetStrategy 设置分块策略
+func (c *MarkdownChunker) SetStrategy(strategyName string, config *StrategyConfig) error {
+	// 创建日志上下文
+	logCtx := NewLogContext("SetStrategy").
+		WithMetadata("strategy_name", strategyName).
+		WithMetadata("has_config", config != nil)
+
+	c.logWithContext("info", "开始设置分块策略", logCtx)
+
+	// 验证输入参数
+	if strategyName == "" {
+		errorLogCtx := NewLogContext("SetStrategy").WithMetadata("error", "strategy name cannot be empty")
+		c.logWithContext("error", "策略名称不能为空", errorLogCtx)
+
+		return NewChunkerError(ErrorTypeStrategyNotFound, "策略名称不能为空", nil).
+			WithContext("function", "SetStrategy").
+			WithContext("strategy_name", strategyName)
+	}
+
+	// 从注册器获取策略
+	strategy, err := c.strategyRegistry.Get(strategyName)
+	if err != nil {
+		errorLogCtx := NewLogContext("SetStrategy").
+			WithMetadata("strategy_name", strategyName).
+			WithMetadata("available_strategies", c.strategyRegistry.List()).
+			WithMetadata("error", err.Error())
+		c.logWithContext("error", "获取策略失败", errorLogCtx)
+
+		return NewChunkerError(ErrorTypeStrategyNotFound, "策略未找到", err).
+			WithContext("function", "SetStrategy").
+			WithContext("strategy_name", strategyName).
+			WithContext("available_strategies", c.strategyRegistry.List())
+	}
+
+	// 如果提供了配置，验证配置
+	if config != nil {
+		configLogCtx := NewLogContext("SetStrategy").
+			WithMetadata("strategy_name", strategyName).
+			WithMetadata("config", config.String())
+		c.logWithContext("debug", "验证策略配置", configLogCtx)
+
+		if err := strategy.ValidateConfig(config); err != nil {
+			errorLogCtx := NewLogContext("SetStrategy").
+				WithMetadata("strategy_name", strategyName).
+				WithMetadata("config", config.String()).
+				WithMetadata("error", err.Error())
+			c.logWithContext("error", "策略配置验证失败", errorLogCtx)
+
+			return NewChunkerError(ErrorTypeStrategyConfigInvalid, "策略配置验证失败", err).
+				WithContext("function", "SetStrategy").
+				WithContext("strategy_name", strategyName).
+				WithContext("config", config.String())
+		}
+	}
+
+	// 克隆策略实例以确保线程安全
+	clonedStrategy := strategy.Clone()
+	if clonedStrategy == nil {
+		errorLogCtx := NewLogContext("SetStrategy").
+			WithMetadata("strategy_name", strategyName).
+			WithMetadata("error", "strategy clone returned nil")
+		c.logWithContext("error", "策略克隆失败", errorLogCtx)
+
+		return NewChunkerError(ErrorTypeStrategyExecutionFailed, "策略克隆失败", nil).
+			WithContext("function", "SetStrategy").
+			WithContext("strategy_name", strategyName)
+	}
+
+	// 应用配置（如果提供）
+	if config != nil {
+		if err := applyStrategyConfig(clonedStrategy, config, c.logger); err != nil {
+			warnLogCtx := NewLogContext("SetStrategy").
+				WithMetadata("strategy_name", strategyName).
+				WithMetadata("config", config.String()).
+				WithMetadata("error", err.Error())
+			c.logWithContext("warn", "应用策略配置失败，使用默认配置", warnLogCtx)
+			// 继续使用策略，但不应用特定配置
+		}
+	}
+
+	// 记录旧策略信息
+	oldStrategyName := ""
+	if c.strategy != nil {
+		oldStrategyName = c.strategy.GetName()
+	}
+
+	// 设置新策略
+	c.strategy = clonedStrategy
+
+	// 更新配置中的策略信息
+	if config != nil {
+		c.config.ChunkingStrategy = config.Clone()
+	} else {
+		// 如果没有提供配置，创建一个基本配置
+		c.config.ChunkingStrategy = &StrategyConfig{
+			Name:       strategyName,
+			Parameters: make(map[string]any),
+		}
+	}
+
+	// 记录策略切换成功
+	successLogCtx := NewLogContext("SetStrategy").
+		WithMetadata("old_strategy", oldStrategyName).
+		WithMetadata("new_strategy", strategyName).
+		WithMetadata("strategy_description", clonedStrategy.GetDescription()).
+		WithMetadata("has_config", config != nil)
+	c.logWithContext("info", "策略切换成功", successLogCtx)
+
+	return nil
+}
+
+// GetCurrentStrategy 获取当前使用的策略信息
+func (c *MarkdownChunker) GetCurrentStrategy() (string, string) {
+	if c.strategy == nil {
+		return "", ""
+	}
+	return c.strategy.GetName(), c.strategy.GetDescription()
+}
+
+// GetAvailableStrategies 获取所有可用的策略列表
+func (c *MarkdownChunker) GetAvailableStrategies() []string {
+	if c.strategyRegistry == nil {
+		return []string{}
+	}
+	return c.strategyRegistry.List()
+}
+
+// GetStrategyConfig 获取当前策略的配置
+func (c *MarkdownChunker) GetStrategyConfig() *StrategyConfig {
+	if c.config == nil || c.config.ChunkingStrategy == nil {
+		return nil
+	}
+	return c.config.ChunkingStrategy.Clone()
+}
+
+// UpdateStrategyConfig 更新当前策略的配置
+func (c *MarkdownChunker) UpdateStrategyConfig(config *StrategyConfig) error {
+	// 创建日志上下文
+	logCtx := NewLogContext("UpdateStrategyConfig").
+		WithMetadata("has_config", config != nil)
+
+	if c.strategy == nil {
+		errorLogCtx := NewLogContext("UpdateStrategyConfig").WithMetadata("error", "no current strategy")
+		c.logWithContext("error", "当前没有设置策略", errorLogCtx)
+
+		return NewChunkerError(ErrorTypeStrategyExecutionFailed, "当前没有设置策略", nil).
+			WithContext("function", "UpdateStrategyConfig")
+	}
+
+	currentStrategyName := c.strategy.GetName()
+	logCtx = logCtx.WithMetadata("current_strategy", currentStrategyName)
+
+	c.logWithContext("info", "开始更新策略配置", logCtx)
+
+	// 如果没有提供配置，创建默认配置
+	if config == nil {
+		config = &StrategyConfig{
+			Name:       currentStrategyName,
+			Parameters: make(map[string]any),
+		}
+	}
+
+	// 确保配置的策略名称与当前策略一致
+	if config.Name != "" && config.Name != currentStrategyName {
+		errorLogCtx := NewLogContext("UpdateStrategyConfig").
+			WithMetadata("current_strategy", currentStrategyName).
+			WithMetadata("config_strategy", config.Name).
+			WithMetadata("error", "strategy name mismatch")
+		c.logWithContext("error", "配置中的策略名称与当前策略不匹配", errorLogCtx)
+
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "配置中的策略名称与当前策略不匹配", nil).
+			WithContext("function", "UpdateStrategyConfig").
+			WithContext("current_strategy", currentStrategyName).
+			WithContext("config_strategy", config.Name)
+	}
+
+	// 设置正确的策略名称
+	config.Name = currentStrategyName
+
+	// 验证配置
+	configLogCtx := NewLogContext("UpdateStrategyConfig").
+		WithMetadata("strategy_name", currentStrategyName).
+		WithMetadata("config", config.String())
+	c.logWithContext("debug", "验证策略配置", configLogCtx)
+
+	if err := c.strategy.ValidateConfig(config); err != nil {
+		errorLogCtx := NewLogContext("UpdateStrategyConfig").
+			WithMetadata("strategy_name", currentStrategyName).
+			WithMetadata("config", config.String()).
+			WithMetadata("error", err.Error())
+		c.logWithContext("error", "策略配置验证失败", errorLogCtx)
+
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "策略配置验证失败", err).
+			WithContext("function", "UpdateStrategyConfig").
+			WithContext("strategy_name", currentStrategyName).
+			WithContext("config", config.String())
+	}
+
+	// 应用配置
+	if err := applyStrategyConfig(c.strategy, config, c.logger); err != nil {
+		errorLogCtx := NewLogContext("UpdateStrategyConfig").
+			WithMetadata("strategy_name", currentStrategyName).
+			WithMetadata("config", config.String()).
+			WithMetadata("error", err.Error())
+		c.logWithContext("error", "应用策略配置失败", errorLogCtx)
+
+		return NewChunkerError(ErrorTypeStrategyExecutionFailed, "应用策略配置失败", err).
+			WithContext("function", "UpdateStrategyConfig").
+			WithContext("strategy_name", currentStrategyName).
+			WithContext("config", config.String())
+	}
+
+	// 更新配置
+	c.config.ChunkingStrategy = config.Clone()
+
+	// 记录配置更新成功
+	successLogCtx := NewLogContext("UpdateStrategyConfig").
+		WithMetadata("strategy_name", currentStrategyName).
+		WithMetadata("config", config.String())
+	c.logWithContext("info", "策略配置更新成功", successLogCtx)
+
+	return nil
+}
+
+// RegisterStrategy 注册新的策略
+func (c *MarkdownChunker) RegisterStrategy(strategy ChunkingStrategy) error {
+	// 创建日志上下文
+	logCtx := NewLogContext("RegisterStrategy")
+
+	if strategy == nil {
+		errorLogCtx := NewLogContext("RegisterStrategy").WithMetadata("error", "strategy cannot be nil")
+		c.logWithContext("error", "策略不能为空", errorLogCtx)
+
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "策略不能为空", nil).
+			WithContext("function", "RegisterStrategy")
+	}
+
+	strategyName := strategy.GetName()
+	logCtx = logCtx.WithMetadata("strategy_name", strategyName)
+
+	c.logWithContext("info", "开始注册策略", logCtx)
+
+	if c.strategyRegistry == nil {
+		errorLogCtx := NewLogContext("RegisterStrategy").
+			WithMetadata("strategy_name", strategyName).
+			WithMetadata("error", "strategy registry not initialized")
+		c.logWithContext("error", "策略注册器未初始化", errorLogCtx)
+
+		return NewChunkerError(ErrorTypeStrategyExecutionFailed, "策略注册器未初始化", nil).
+			WithContext("function", "RegisterStrategy").
+			WithContext("strategy_name", strategyName)
+	}
+
+	// 注册策略
+	if err := c.strategyRegistry.Register(strategy); err != nil {
+		errorLogCtx := NewLogContext("RegisterStrategy").
+			WithMetadata("strategy_name", strategyName).
+			WithMetadata("error", err.Error())
+		c.logWithContext("error", "策略注册失败", errorLogCtx)
+
+		return err // 直接返回注册器的错误
+	}
+
+	// 记录注册成功
+	successLogCtx := NewLogContext("RegisterStrategy").
+		WithMetadata("strategy_name", strategyName).
+		WithMetadata("strategy_description", strategy.GetDescription()).
+		WithMetadata("total_strategies", c.strategyRegistry.GetStrategyCount())
+	c.logWithContext("info", "策略注册成功", successLogCtx)
+
+	return nil
+}
+
+// UnregisterStrategy 注销策略
+func (c *MarkdownChunker) UnregisterStrategy(strategyName string) error {
+	// 创建日志上下文
+	logCtx := NewLogContext("UnregisterStrategy").
+		WithMetadata("strategy_name", strategyName)
+
+	c.logWithContext("info", "开始注销策略", logCtx)
+
+	if strategyName == "" {
+		errorLogCtx := NewLogContext("UnregisterStrategy").WithMetadata("error", "strategy name cannot be empty")
+		c.logWithContext("error", "策略名称不能为空", errorLogCtx)
+
+		return NewChunkerError(ErrorTypeStrategyNotFound, "策略名称不能为空", nil).
+			WithContext("function", "UnregisterStrategy")
+	}
+
+	if c.strategyRegistry == nil {
+		errorLogCtx := NewLogContext("UnregisterStrategy").
+			WithMetadata("strategy_name", strategyName).
+			WithMetadata("error", "strategy registry not initialized")
+		c.logWithContext("error", "策略注册器未初始化", errorLogCtx)
+
+		return NewChunkerError(ErrorTypeStrategyExecutionFailed, "策略注册器未初始化", nil).
+			WithContext("function", "UnregisterStrategy").
+			WithContext("strategy_name", strategyName)
+	}
+
+	// 检查是否是当前使用的策略
+	if c.strategy != nil && c.strategy.GetName() == strategyName {
+		errorLogCtx := NewLogContext("UnregisterStrategy").
+			WithMetadata("strategy_name", strategyName).
+			WithMetadata("error", "cannot unregister current strategy")
+		c.logWithContext("error", "不能注销当前正在使用的策略", errorLogCtx)
+
+		return NewChunkerError(ErrorTypeStrategyConfigInvalid, "不能注销当前正在使用的策略", nil).
+			WithContext("function", "UnregisterStrategy").
+			WithContext("strategy_name", strategyName).
+			WithContext("recommendation", "请先切换到其他策略")
+	}
+
+	// 注销策略
+	if err := c.strategyRegistry.Unregister(strategyName); err != nil {
+		errorLogCtx := NewLogContext("UnregisterStrategy").
+			WithMetadata("strategy_name", strategyName).
+			WithMetadata("error", err.Error())
+		c.logWithContext("error", "策略注销失败", errorLogCtx)
+
+		return err // 直接返回注册器的错误
+	}
+
+	// 记录注销成功
+	successLogCtx := NewLogContext("UnregisterStrategy").
+		WithMetadata("strategy_name", strategyName).
+		WithMetadata("remaining_strategies", c.strategyRegistry.GetStrategyCount())
+	c.logWithContext("info", "策略注销成功", successLogCtx)
+
+	return nil
+}
+
+// HasStrategy 检查是否存在指定的策略
+func (c *MarkdownChunker) HasStrategy(strategyName string) bool {
+	if c.strategyRegistry == nil {
+		return false
+	}
+	return c.strategyRegistry.HasStrategy(strategyName)
+}
+
+// GetStrategyCount 获取已注册的策略数量
+func (c *MarkdownChunker) GetStrategyCount() int {
+	if c.strategyRegistry == nil {
+		return 0
+	}
+	return c.strategyRegistry.GetStrategyCount()
 }
 
 // isTypeEnabled 检查指定类型是否启用
@@ -616,8 +1441,37 @@ func (c *MarkdownChunker) isTypeEnabled(chunkType string) bool {
 }
 
 // NewMarkdownChunker 创建新的分块器，使用默认配置
+// 这个函数保持向后兼容性，确保现有代码无需修改即可工作
 func NewMarkdownChunker() *MarkdownChunker {
 	return NewMarkdownChunkerWithConfig(DefaultConfig())
+}
+
+// NewMarkdownChunkerWithStrategy 使用指定策略创建新的分块器
+// 这是一个便捷函数，用于快速创建使用特定策略的分块器
+func NewMarkdownChunkerWithStrategy(strategyName string) *MarkdownChunker {
+	config := DefaultConfig()
+
+	switch strategyName {
+	case "hierarchical":
+		config.ChunkingStrategy = HierarchicalConfig(0) // 无层级限制
+	case "document-level":
+		config.ChunkingStrategy = DocumentLevelConfig()
+	case "element-level":
+		config.ChunkingStrategy = ElementLevelConfig()
+	default:
+		// 对于未知策略，使用默认策略并记录警告
+		config.ChunkingStrategy = ElementLevelConfig()
+	}
+
+	return NewMarkdownChunkerWithConfig(config)
+}
+
+// NewMarkdownChunkerWithHierarchicalStrategy 创建使用层级策略的分块器
+// 这是一个便捷函数，用于快速创建层级分块器
+func NewMarkdownChunkerWithHierarchicalStrategy(maxDepth int) *MarkdownChunker {
+	config := DefaultConfig()
+	config.ChunkingStrategy = HierarchicalConfig(maxDepth)
+	return NewMarkdownChunkerWithConfig(config)
 }
 
 // NewMarkdownChunkerWithConfig 使用指定配置创建新的分块器
@@ -625,6 +1479,9 @@ func NewMarkdownChunkerWithConfig(config *ChunkerConfig) *MarkdownChunker {
 	if config == nil {
 		config = DefaultConfig()
 	}
+
+	// 确保有默认的策略配置
+	EnsureDefaultStrategyConfig(config)
 
 	// 验证配置
 	if err := ValidateConfig(config); err != nil {
@@ -789,18 +1646,40 @@ func NewMarkdownChunkerWithConfig(config *ChunkerConfig) *MarkdownChunker {
 			"extractors_count", len(config.CustomExtractors))
 	}
 
+	// 初始化策略系统
+	logger.Debugw("初始化策略系统",
+		"function", "NewMarkdownChunkerWithConfig")
+
+	strategyRegistry, currentStrategy := initializeStrategySystem(config, logger)
+
+	logger.Infow("策略系统初始化完成",
+		"function", "NewMarkdownChunkerWithConfig",
+		"current_strategy", currentStrategy.GetName(),
+		"registered_strategies", strategyRegistry.List())
+
 	// 记录系统初始化完成日志
 	logger.Infow("MarkdownChunker 系统初始化完成",
 		"function", "NewMarkdownChunkerWithConfig",
 		"initialization_phase", "complete",
 		"components_initialized", []string{
 			"goldmark_parser", "logger", "error_handler",
-			"performance_monitor", "string_operations",
+			"performance_monitor", "string_operations", "strategy_system",
 		})
+
+	// 初始化策略缓存和池
+	logger.Debugw("初始化策略缓存和实例池",
+		"function", "NewMarkdownChunkerWithConfig")
+
+	strategyCache := NewStrategyCache()
+	strategyPool := NewStrategyPool()
 
 	return &MarkdownChunker{
 		md:                 md,
 		config:             config,
+		strategy:           currentStrategy,
+		strategyRegistry:   strategyRegistry,
+		strategyCache:      strategyCache,
+		strategyPool:       strategyPool,
 		errorHandler:       errorHandler,
 		performanceMonitor: performanceMonitor,
 		memoryOptimizer:    memoryOptimizer,
@@ -923,122 +1802,110 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 	parseCompleteLogCtx := NewLogContext("ChunkDocument").WithDocumentInfo(len(content), 0)
 	c.logWithContext("debug", "Markdown AST 解析完成", parseCompleteLogCtx)
 
-	// 遍历顶层节点进行分块
-	traverseLogCtx := NewLogContext("ChunkDocument").WithDocumentInfo(len(content), 0)
-	c.logWithContext("debug", "开始遍历 AST 节点进行分块", traverseLogCtx)
+	// 使用策略进行分块
+	strategyName := "unknown"
+	if c.strategy != nil {
+		strategyName = c.strategy.GetName()
+	}
+	strategyLogCtx := NewLogContext("ChunkDocument").
+		WithDocumentInfo(len(content), 0).
+		WithMetadata("strategy", strategyName)
+	c.logWithContext("debug", "开始使用策略进行分块", strategyLogCtx)
 
-	chunkID := 0
-	processedNodes := 0
+	// 使用策略处理文档，包含错误恢复机制
+	strategyChunks, err := c.executeStrategyWithRecovery(doc, content)
+	if err != nil {
+		// 策略执行失败的详细错误处理已在 executeStrategyWithRecovery 中完成
+		return nil, err
+	}
 
-	for child := doc.FirstChild(); child != nil; child = child.NextSibling() {
-		processedNodes++
-
-		// 使用defer和recover来捕获节点处理中的panic
-		var chunk *Chunk
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					panicLogCtx := NewLogContext("ChunkDocument").
-						WithNodeInfo(child.Kind().String(), chunkID).
-						WithMetadata("processed_nodes", processedNodes).
-						WithMetadata("panic_value", fmt.Sprintf("%v", r))
-					c.logWithContext("error", "节点处理发生panic", panicLogCtx)
-
-					err := NewChunkerError(ErrorTypeParsingFailed, "节点处理过程中发生严重错误", fmt.Errorf("panic: %v", r)).
-						WithContext("function", "ChunkDocument").
-						WithContext("node_id", chunkID).
-						WithContext("processed_nodes", processedNodes).
-						WithContext("panic_value", fmt.Sprintf("%v", r)).
-						WithContext("node_type", child.Kind().String()).
-						WithContext("recovery_action", "跳过当前节点继续处理")
-					c.errorHandler.HandleError(err)
-					chunk = nil // 确保不处理这个块
-				}
-			}()
-
-			chunk = c.processNode(child, chunkID)
-		}()
-
-		if chunk != nil {
-			// 检查类型是否启用
-			if !c.isTypeEnabled(chunk.Type) {
-				skipTypeLogCtx := NewLogContext("ChunkDocument").
-					WithNodeInfo(chunk.Type, chunkID).
-					WithMetadata("chunk_type", chunk.Type)
-				c.logWithContext("debug", "跳过未启用的块类型", skipTypeLogCtx)
-				continue
-			}
-
-			// 检查是否过滤空块
-			if c.config.FilterEmptyChunks && strings.TrimSpace(chunk.Text) == "" {
-				filterEmptyLogCtx := NewLogContext("ChunkDocument").
-					WithNodeInfo(chunk.Type, chunkID).
-					WithMetadata("chunk_type", chunk.Type)
-				c.logWithContext("debug", "过滤空块", filterEmptyLogCtx)
-				continue
-			}
-
-			// 检查块大小限制
-			if c.config.MaxChunkSize > 0 && len(chunk.Content) > c.config.MaxChunkSize {
-				oversizeLogCtx := NewLogContext("ChunkDocument").
-					WithNodeInfo(chunk.Type, chunk.ID).
-					WithMetadata("chunk_size", len(chunk.Content)).
-					WithMetadata("max_size", c.config.MaxChunkSize).
-					WithMetadata("size_ratio", float64(len(chunk.Content))/float64(c.config.MaxChunkSize))
-				c.logWithContext("warn", "块大小超过限制", oversizeLogCtx)
-
-				err := NewChunkerError(ErrorTypeChunkTooLarge, "生成的块大小超过配置限制", nil).
-					WithContext("function", "ChunkDocument").
-					WithContext("chunk_id", chunk.ID).
-					WithContext("chunk_type", chunk.Type).
-					WithContext("chunk_size_bytes", len(chunk.Content)).
-					WithContext("max_size_bytes", c.config.MaxChunkSize).
-					WithContext("size_ratio", float64(len(chunk.Content))/float64(c.config.MaxChunkSize)).
-					WithContext("content_preview", chunk.Content[:min(100, len(chunk.Content))]).
-					WithContext("handling_mode", c.config.ErrorHandling).
-					WithContext("recommendation", "考虑增加MaxChunkSize或启用内容截断")
-
-				if handlerErr := c.errorHandler.HandleError(err); handlerErr != nil {
-					return nil, handlerErr
-				}
-
-				// 在宽松模式下截断内容
-				if c.config.ErrorHandling != ErrorModeStrict {
-					truncateLogCtx := NewLogContext("ChunkDocument").
-						WithNodeInfo(chunk.Type, chunk.ID).
-						WithMetadata("original_size", len(chunk.Content)).
-						WithMetadata("truncated_size", c.config.MaxChunkSize)
-					c.logWithContext("info", "截断超大块内容", truncateLogCtx)
-
-					chunk.Content = chunk.Content[:c.config.MaxChunkSize]
-					chunk.Text = chunk.Text[:min(len(chunk.Text), c.config.MaxChunkSize)]
-				}
-			}
-
-			// 应用自定义元数据提取器
-			for _, extractor := range c.config.CustomExtractors {
-				supportedTypes := extractor.SupportedTypes()
-				if len(supportedTypes) == 0 || slices.Contains(supportedTypes, chunk.Type) {
-					maps.Copy(chunk.Metadata, extractor.Extract(child, c.source))
-				}
-			}
-
-			c.chunks = append(c.chunks, *chunk)
-
-			// 记录处理的块
-			c.performanceMonitor.RecordChunk(chunk)
-
-			// 记录成功处理的块
-			successChunkLogCtx := NewLogContext("ChunkDocument").
+	// 后处理：应用配置级别的过滤和处理
+	c.chunks = []Chunk{}
+	for i, chunk := range strategyChunks {
+		// 检查类型是否启用
+		if !c.isTypeEnabled(chunk.Type) {
+			skipTypeLogCtx := NewLogContext("ChunkDocument").
 				WithNodeInfo(chunk.Type, chunk.ID).
-				WithContentInfo(len(chunk.Content), len(chunk.Text), len(strings.Fields(chunk.Text)))
-			c.logWithContext("debug", "成功处理块", successChunkLogCtx)
-
-			chunkID++
+				WithMetadata("chunk_type", chunk.Type)
+			c.logWithContext("debug", "跳过未启用的块类型", skipTypeLogCtx)
+			continue
 		}
 
-		// 每处理100个节点记录一次进度（用于大型文档）
-		if processedNodes%100 == 0 && len(content) > 1024*1024 { // 只对大于1MB的文档记录进度
+		// 检查是否过滤空块
+		if c.config.FilterEmptyChunks && strings.TrimSpace(chunk.Text) == "" {
+			filterEmptyLogCtx := NewLogContext("ChunkDocument").
+				WithNodeInfo(chunk.Type, chunk.ID).
+				WithMetadata("chunk_type", chunk.Type)
+			c.logWithContext("debug", "过滤空块", filterEmptyLogCtx)
+			continue
+		}
+
+		// 检查块大小限制
+		if c.config.MaxChunkSize > 0 && len(chunk.Content) > c.config.MaxChunkSize {
+			oversizeLogCtx := NewLogContext("ChunkDocument").
+				WithNodeInfo(chunk.Type, chunk.ID).
+				WithMetadata("chunk_size", len(chunk.Content)).
+				WithMetadata("max_size", c.config.MaxChunkSize).
+				WithMetadata("size_ratio", float64(len(chunk.Content))/float64(c.config.MaxChunkSize))
+			c.logWithContext("warn", "块大小超过限制", oversizeLogCtx)
+
+			err := NewChunkerError(ErrorTypeChunkTooLarge, "生成的块大小超过配置限制", nil).
+				WithContext("function", "ChunkDocument").
+				WithContext("chunk_id", chunk.ID).
+				WithContext("chunk_type", chunk.Type).
+				WithContext("chunk_size_bytes", len(chunk.Content)).
+				WithContext("max_size_bytes", c.config.MaxChunkSize).
+				WithContext("size_ratio", float64(len(chunk.Content))/float64(c.config.MaxChunkSize)).
+				WithContext("content_preview", chunk.Content[:min(100, len(chunk.Content))]).
+				WithContext("handling_mode", c.config.ErrorHandling).
+				WithContext("recommendation", "考虑增加MaxChunkSize或启用内容截断")
+
+			if handlerErr := c.errorHandler.HandleError(err); handlerErr != nil {
+				return nil, handlerErr
+			}
+
+			// 在宽松模式下截断内容
+			if c.config.ErrorHandling != ErrorModeStrict {
+				truncateLogCtx := NewLogContext("ChunkDocument").
+					WithNodeInfo(chunk.Type, chunk.ID).
+					WithMetadata("original_size", len(chunk.Content)).
+					WithMetadata("truncated_size", c.config.MaxChunkSize)
+				c.logWithContext("info", "截断超大块内容", truncateLogCtx)
+
+				chunk.Content = chunk.Content[:c.config.MaxChunkSize]
+				chunk.Text = chunk.Text[:min(len(chunk.Text), c.config.MaxChunkSize)]
+			}
+		}
+
+		// 应用自定义元数据提取器（需要重新解析以获取AST节点）
+		if len(c.config.CustomExtractors) > 0 {
+			// 为了应用自定义提取器，我们需要重新解析这个块的内容
+			// 这是一个权衡：为了保持兼容性，我们在这里重新解析
+			reader := text.NewReader([]byte(chunk.Content))
+			chunkDoc := c.md.Parser().Parse(reader)
+			if chunkDoc != nil && chunkDoc.FirstChild() != nil {
+				for _, extractor := range c.config.CustomExtractors {
+					supportedTypes := extractor.SupportedTypes()
+					if len(supportedTypes) == 0 || slices.Contains(supportedTypes, chunk.Type) {
+						maps.Copy(chunk.Metadata, extractor.Extract(chunkDoc.FirstChild(), []byte(chunk.Content)))
+					}
+				}
+			}
+		}
+
+		c.chunks = append(c.chunks, chunk)
+
+		// 记录处理的块
+		c.performanceMonitor.RecordChunk(&chunk)
+
+		// 记录成功处理的块
+		successChunkLogCtx := NewLogContext("ChunkDocument").
+			WithNodeInfo(chunk.Type, chunk.ID).
+			WithContentInfo(len(chunk.Content), len(chunk.Text), len(strings.Fields(chunk.Text)))
+		c.logWithContext("debug", "成功处理块", successChunkLogCtx)
+
+		// 每处理100个块记录一次进度（用于大型文档）
+		if i%100 == 0 && len(content) > 1024*1024 { // 只对大于1MB的文档记录进度
 			// 检查内存使用情况
 			c.performanceMonitor.CheckMemoryThresholds()
 
@@ -1047,7 +1914,7 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 				if err := c.memoryOptimizer.CheckMemoryLimit(); err != nil {
 					memoryErrorLogCtx := NewLogContext("ChunkDocument").
 						WithDocumentInfo(len(content), len(c.chunks)).
-						WithMetadata("processed_nodes", processedNodes).
+						WithMetadata("processed_chunks", i).
 						WithMetadata("error", err.Error())
 					c.logWithContext("warn", "内存限制检查失败", memoryErrorLogCtx)
 
@@ -1060,22 +1927,29 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 				}
 
 				// 记录已处理的字节数（用于GC触发）
-				c.memoryOptimizer.RecordProcessedBytes(int64(len(content)) / 100) // 分摊到每100个节点
+				c.memoryOptimizer.RecordProcessedBytes(int64(len(content)) / 100) // 分摊到每100个块
 			}
 
 			progressLogCtx := NewLogContext("ChunkDocument").
 				WithDocumentInfo(len(content), len(c.chunks)).
-				WithMetadata("processed_nodes", processedNodes).
+				WithMetadata("processed_chunks", i).
+				WithMetadata("total_chunks", len(strategyChunks)).
 				WithMetadata("document_size_mb", len(content)/(1024*1024)).
-				WithMetadata("progress_percentage", float64(processedNodes*100)/float64(len(content)/1000))
+				WithMetadata("progress_percentage", float64(i*100)/float64(len(strategyChunks)))
 			c.logWithContext("info", "文档处理进度", progressLogCtx)
 		}
 	}
 
-	completeTraverseLogCtx := NewLogContext("ChunkDocument").
+	strategyNameForLog := "unknown"
+	if c.strategy != nil {
+		strategyNameForLog = c.strategy.GetName()
+	}
+	completeStrategyLogCtx := NewLogContext("ChunkDocument").
 		WithDocumentInfo(len(content), len(c.chunks)).
-		WithMetadata("total_processed_nodes", processedNodes)
-	c.logWithContext("debug", "完成 AST 节点遍历", completeTraverseLogCtx)
+		WithMetadata("strategy", strategyNameForLog).
+		WithMetadata("total_chunks", len(strategyChunks)).
+		WithMetadata("filtered_chunks", len(c.chunks))
+	c.logWithContext("debug", "完成策略分块处理", completeStrategyLogCtx)
 
 	// 最终的资源使用情况检查和报告
 	if c.memoryOptimizer != nil {
@@ -1105,6 +1979,429 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 	c.performanceMonitor.CheckMemoryThresholds()
 
 	return c.chunks, nil
+}
+
+// executeStrategyWithRecovery 执行策略分块，包含错误恢复机制
+func (c *MarkdownChunker) executeStrategyWithRecovery(doc ast.Node, content []byte) ([]Chunk, error) {
+	// 创建执行上下文
+	context := c.createStrategyExecutionContext(doc, content)
+
+	// 创建日志上下文
+	strategyName := "unknown"
+	if c.strategy != nil {
+		strategyName = c.strategy.GetName()
+	}
+	logCtx := NewLogContext("executeStrategyWithRecovery").
+		WithDocumentInfo(len(content), 0).
+		WithMetadata("strategy", strategyName)
+
+	c.logWithContext("debug", "开始执行策略分块", logCtx)
+
+	// 检查策略是否为空
+	if c.strategy == nil {
+		c.logWithContext("error", "当前策略为空", logCtx)
+
+		err := NewChunkerError(ErrorTypeStrategyExecutionFailed, "当前策略为空", nil).
+			WithContext("function", "executeStrategyWithRecovery").
+			WithContext("document_size_bytes", len(content))
+
+		// 尝试恢复：使用默认策略
+		if c.config.ErrorHandling != ErrorModeStrict {
+			c.logWithContext("warn", "尝试使用默认策略恢复", logCtx)
+			if recoveryErr := c.recoverWithDefaultStrategy(); recoveryErr != nil {
+				c.logWithContext("error", "默认策略恢复失败", logCtx.WithMetadata("recovery_error", recoveryErr.Error()))
+				// 恢复失败是致命错误，直接返回，不通过错误处理器
+				if chunkerErr, ok := recoveryErr.(*ChunkerError); ok {
+					return nil, chunkerErr
+				}
+				return nil, NewChunkerError(ErrorTypeStrategyExecutionFailed, "默认策略恢复失败", recoveryErr)
+			}
+			// 递归调用，使用恢复后的策略
+			return c.executeStrategyWithRecovery(doc, content)
+		}
+
+		return nil, c.errorHandler.HandleError(err)
+	}
+
+	// 获取优化的策略实例
+	optimizedStrategy := c.getOptimizedStrategyInstance(c.strategy.GetName())
+
+	// 执行策略分块
+	startTime := time.Now()
+	strategyChunks, err := optimizedStrategy.ChunkDocument(doc, content, c)
+	executionTime := time.Since(startTime)
+
+	// 将策略实例放回池中以供复用
+	c.returnStrategyInstance(c.strategy.GetName(), optimizedStrategy)
+
+	// 记录策略执行性能
+	logCtx = logCtx.WithProcessTime(executionTime).WithMetadata("chunks_generated", len(strategyChunks))
+
+	if err != nil {
+		c.logWithContext("error", "策略分块执行失败", logCtx.WithMetadata("error", err.Error()))
+
+		// 创建详细的策略执行错误
+		strategyErr := NewChunkerError(ErrorTypeStrategyExecutionFailed, "策略执行失败", err).
+			WithContext("function", "executeStrategyWithRecovery").
+			WithContext("strategy", c.strategy.GetName()).
+			WithContext("document_size_bytes", len(content)).
+			WithContext("execution_time_ms", executionTime.Milliseconds())
+
+		// 根据错误处理模式决定是否尝试恢复
+		switch c.config.ErrorHandling {
+		case ErrorModeStrict:
+			// 严格模式：直接返回错误
+			return nil, c.errorHandler.HandleError(strategyErr)
+
+		case ErrorModePermissive:
+			// 宽松模式：尝试恢复
+			c.logWithContext("warn", "尝试从策略执行失败中恢复", logCtx)
+
+			// 尝试使用默认策略恢复
+			if recoveryErr := c.recoverWithDefaultStrategy(); recoveryErr != nil {
+				c.logWithContext("error", "策略恢复失败", logCtx.WithMetadata("recovery_error", recoveryErr.Error()))
+				// 记录原始错误和恢复错误
+				if handlerErr := c.errorHandler.HandleError(strategyErr); handlerErr != nil {
+					return nil, handlerErr
+				}
+				if chunkerErr, ok := recoveryErr.(*ChunkerError); ok {
+					return nil, c.errorHandler.HandleError(chunkerErr)
+				}
+				return nil, c.errorHandler.HandleError(NewChunkerError(ErrorTypeStrategyExecutionFailed, "策略恢复失败", recoveryErr))
+			}
+
+			// 使用恢复后的策略重试
+			c.logWithContext("info", "使用恢复策略重试分块", logCtx.WithMetadata("recovery_strategy", c.strategy.GetName()))
+			return c.executeStrategyWithRecovery(doc, content)
+
+		case ErrorModeSilent:
+			// 静默模式：记录错误但尝试恢复
+			c.errorHandler.HandleError(strategyErr) // 记录但不返回错误
+
+			if recoveryErr := c.recoverWithDefaultStrategy(); recoveryErr != nil {
+				// 恢复失败，返回空结果
+				c.logWithContext("warn", "策略恢复失败，返回空结果", logCtx)
+				return []Chunk{}, nil
+			}
+
+			// 使用恢复后的策略重试
+			return c.executeStrategyWithRecovery(doc, content)
+
+		default:
+			// 未知错误处理模式，使用宽松模式
+			c.logWithContext("warn", "未知错误处理模式，使用宽松模式", logCtx.WithMetadata("error_mode", c.config.ErrorHandling))
+			if recoveryErr := c.recoverWithDefaultStrategy(); recoveryErr != nil {
+				return nil, c.errorHandler.HandleError(strategyErr)
+			}
+			return c.executeStrategyWithRecovery(doc, content)
+		}
+	}
+
+	// 策略执行成功
+	c.logWithContext("debug", "策略分块执行成功", logCtx)
+
+	// 验证策略返回的结果
+	if strategyChunks == nil {
+		c.logWithContext("warn", "策略返回空结果", logCtx)
+		strategyChunks = []Chunk{} // 确保返回非nil切片
+	}
+
+	// 验证返回的块数据
+	if err := c.validateStrategyOutput(strategyChunks, context); err != nil {
+		c.logWithContext("warn", "策略输出验证失败", logCtx.WithMetadata("validation_error", err.Error()))
+
+		// 在非严格模式下，尝试修复输出
+		if c.config.ErrorHandling != ErrorModeStrict {
+			strategyChunks = c.sanitizeStrategyOutput(strategyChunks)
+			c.logWithContext("info", "已修复策略输出", logCtx.WithMetadata("fixed_chunks", len(strategyChunks)))
+		} else {
+			return nil, c.handleStrategyError(err, c.strategy.GetName(), context)
+		}
+	}
+
+	// 记录策略执行统计信息
+	c.performanceMonitor.RecordStrategyExecution(c.strategy.GetName(), executionTime, len(strategyChunks))
+
+	return strategyChunks, nil
+}
+
+// recoverWithDefaultStrategy 使用默认策略恢复
+func (c *MarkdownChunker) recoverWithDefaultStrategy() error {
+	logCtx := NewLogContext("recoverWithDefaultStrategy")
+	c.logWithContext("info", "开始策略恢复", logCtx)
+
+	// 检查是否有策略注册器
+	if c.strategyRegistry == nil {
+		c.logWithContext("error", "策略注册器未初始化，无法恢复", logCtx)
+		return NewChunkerError(ErrorTypeStrategyExecutionFailed, "策略注册器未初始化，无法恢复", nil).
+			WithContext("function", "recoverWithDefaultStrategy")
+	}
+
+	// 尝试获取默认的元素级策略
+	defaultStrategy, err := c.strategyRegistry.Get("element-level")
+	if err != nil {
+		c.logWithContext("error", "获取默认策略失败", logCtx.WithMetadata("error", err.Error()))
+		return NewChunkerError(ErrorTypeStrategyExecutionFailed, "获取默认策略失败", err).
+			WithContext("function", "recoverWithDefaultStrategy").
+			WithContext("default_strategy", "element-level")
+	}
+
+	// 克隆策略以确保线程安全
+	clonedStrategy := defaultStrategy.Clone()
+	if clonedStrategy == nil {
+		c.logWithContext("error", "默认策略克隆失败", logCtx)
+		return NewChunkerError(ErrorTypeStrategyExecutionFailed, "默认策略克隆失败", nil).
+			WithContext("function", "recoverWithDefaultStrategy").
+			WithContext("default_strategy", "element-level")
+	}
+
+	// 设置为当前策略
+	c.strategy = clonedStrategy
+
+	c.logWithContext("info", "成功恢复到默认策略", logCtx.WithMetadata("recovery_strategy", c.strategy.GetName()))
+	return nil
+}
+
+// handleStrategyError 处理策略相关错误
+func (c *MarkdownChunker) handleStrategyError(err error, strategyName string, context map[string]any) error {
+	logCtx := NewLogContext("handleStrategyError").
+		WithMetadata("strategy", strategyName).
+		WithMetadata("original_error", err.Error())
+
+	// 添加上下文信息到日志
+	for key, value := range context {
+		logCtx = logCtx.WithMetadata(key, value)
+	}
+
+	c.logWithContext("error", "处理策略错误", logCtx)
+
+	// 检查是否是已知的分块器错误
+	if chunkerErr, ok := err.(*ChunkerError); ok {
+		// 为策略错误添加额外上下文
+		chunkerErr.WithContext("strategy", strategyName)
+		for key, value := range context {
+			chunkerErr.WithContext(key, value)
+		}
+		return c.errorHandler.HandleError(chunkerErr)
+	}
+
+	// 创建新的策略执行错误
+	strategyErr := NewChunkerError(ErrorTypeStrategyExecutionFailed,
+		fmt.Sprintf("策略 '%s' 执行失败", strategyName), err).
+		WithContext("strategy", strategyName)
+
+	// 添加上下文信息
+	for key, value := range context {
+		strategyErr.WithContext(key, value)
+	}
+
+	return c.errorHandler.HandleError(strategyErr)
+}
+
+// createStrategyExecutionContext 创建策略执行上下文
+func (c *MarkdownChunker) createStrategyExecutionContext(doc ast.Node, content []byte) map[string]any {
+	context := make(map[string]any)
+
+	context["function"] = "executeStrategyWithRecovery"
+	context["document_size_bytes"] = len(content)
+	if c.strategy != nil {
+		context["strategy"] = c.strategy.GetName()
+	} else {
+		context["strategy"] = "unknown"
+	}
+	context["error_handling_mode"] = c.config.ErrorHandling
+
+	// 添加文档统计信息
+	if doc != nil {
+		nodeCount := 0
+		ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+			if entering {
+				nodeCount++
+			}
+			return ast.WalkContinue, nil
+		})
+		context["ast_node_count"] = nodeCount
+	}
+
+	// 添加配置信息
+	if c.config != nil {
+		context["max_chunk_size"] = c.config.MaxChunkSize
+		context["filter_empty_chunks"] = c.config.FilterEmptyChunks
+		context["performance_mode"] = c.config.PerformanceMode
+	}
+
+	return context
+}
+
+// validateStrategyOutput 验证策略输出的有效性
+func (c *MarkdownChunker) validateStrategyOutput(chunks []Chunk, context map[string]any) error {
+	logCtx := NewLogContext("validateStrategyOutput").
+		WithMetadata("chunks_count", len(chunks))
+
+	// 添加上下文信息
+	for key, value := range context {
+		logCtx = logCtx.WithMetadata(key, value)
+	}
+
+	c.logWithContext("debug", "开始验证策略输出", logCtx)
+
+	// 检查块ID的唯一性和连续性
+	idMap := make(map[int]bool)
+	for i, chunk := range chunks {
+		// 检查ID是否重复
+		if idMap[chunk.ID] {
+			c.logWithContext("error", "发现重复的块ID", logCtx.WithMetadata("duplicate_id", chunk.ID).WithMetadata("chunk_index", i))
+			return NewChunkerError(ErrorTypeStrategyExecutionFailed, "策略输出包含重复的块ID", nil).
+				WithContext("function", "validateStrategyOutput").
+				WithContext("duplicate_id", chunk.ID).
+				WithContext("chunk_index", i)
+		}
+		idMap[chunk.ID] = true
+
+		// 检查块内容是否为空
+		if strings.TrimSpace(chunk.Content) == "" && strings.TrimSpace(chunk.Text) == "" {
+			c.logWithContext("warn", "发现空块", logCtx.WithMetadata("chunk_id", chunk.ID).WithMetadata("chunk_type", chunk.Type))
+		}
+
+		// 检查块类型是否有效
+		validTypes := map[string]bool{
+			"heading": true, "paragraph": true, "code": true,
+			"table": true, "list": true, "blockquote": true,
+			"thematic_break": true, "document": true,
+		}
+		if !validTypes[chunk.Type] {
+			c.logWithContext("warn", "发现无效的块类型", logCtx.WithMetadata("chunk_id", chunk.ID).WithMetadata("invalid_type", chunk.Type))
+		}
+
+		// 检查元数据是否初始化
+		if chunk.Metadata == nil {
+			c.logWithContext("warn", "块元数据未初始化", logCtx.WithMetadata("chunk_id", chunk.ID))
+		}
+	}
+
+	c.logWithContext("debug", "策略输出验证完成", logCtx)
+	return nil
+}
+
+// sanitizeStrategyOutput 修复策略输出中的问题
+func (c *MarkdownChunker) sanitizeStrategyOutput(chunks []Chunk) []Chunk {
+	logCtx := NewLogContext("sanitizeStrategyOutput").
+		WithMetadata("original_chunks_count", len(chunks))
+
+	c.logWithContext("debug", "开始修复策略输出", logCtx)
+
+	var sanitizedChunks []Chunk
+	idMap := make(map[int]bool)
+	nextID := 0
+
+	for _, chunk := range chunks {
+		// 修复重复或无效的ID
+		if idMap[chunk.ID] || chunk.ID < 0 {
+			c.logWithContext("debug", "修复块ID", logCtx.WithMetadata("original_id", chunk.ID).WithMetadata("new_id", nextID))
+			chunk.ID = nextID
+		}
+		idMap[chunk.ID] = true
+		nextID = chunk.ID + 1
+
+		// 初始化元数据
+		if chunk.Metadata == nil {
+			chunk.Metadata = make(map[string]string)
+			c.logWithContext("debug", "初始化块元数据", logCtx.WithMetadata("chunk_id", chunk.ID))
+		}
+
+		// 修复块类型
+		validTypes := map[string]bool{
+			"heading": true, "paragraph": true, "code": true,
+			"table": true, "list": true, "blockquote": true,
+			"thematic_break": true, "document": true,
+		}
+		if !validTypes[chunk.Type] {
+			c.logWithContext("debug", "修复块类型", logCtx.WithMetadata("chunk_id", chunk.ID).WithMetadata("original_type", chunk.Type))
+			chunk.Type = "paragraph" // 默认类型
+		}
+
+		// 过滤完全空的块（如果配置要求）
+		if c.config.FilterEmptyChunks && strings.TrimSpace(chunk.Content) == "" && strings.TrimSpace(chunk.Text) == "" {
+			c.logWithContext("debug", "过滤空块", logCtx.WithMetadata("chunk_id", chunk.ID))
+			continue
+		}
+
+		// 添加修复标记到元数据
+		chunk.Metadata["sanitized"] = "true"
+		chunk.Metadata["sanitized_at"] = time.Now().Format(time.RFC3339)
+
+		sanitizedChunks = append(sanitizedChunks, chunk)
+	}
+
+	c.logWithContext("info", "策略输出修复完成", logCtx.
+		WithMetadata("sanitized_chunks_count", len(sanitizedChunks)).
+		WithMetadata("removed_chunks", len(chunks)-len(sanitizedChunks)))
+
+	return sanitizedChunks
+}
+
+// getOptimizedStrategyInstance 获取优化的策略实例
+func (c *MarkdownChunker) getOptimizedStrategyInstance(strategyName string) ChunkingStrategy {
+	// 首先尝试从缓存获取
+	if cachedStrategy, exists := c.strategyCache.Get(strategyName); exists {
+		// 从池中获取实例
+		return c.strategyPool.Get(strategyName, func() ChunkingStrategy {
+			return cachedStrategy.Clone()
+		})
+	}
+
+	// 如果缓存中没有，从注册器获取并缓存
+	if strategy, err := c.strategyRegistry.Get(strategyName); err == nil {
+		c.strategyCache.Put(strategyName, strategy)
+
+		// 从池中获取实例
+		return c.strategyPool.Get(strategyName, func() ChunkingStrategy {
+			return strategy.Clone()
+		})
+	}
+
+	// 如果都失败了，返回当前策略的克隆
+	return c.strategy.Clone()
+}
+
+// returnStrategyInstance 将策略实例返回到池中
+func (c *MarkdownChunker) returnStrategyInstance(strategyName string, strategy ChunkingStrategy) {
+	log.Info("Returning strategy instance to pool", "strategy", strategyName)
+
+	if strategy != nil {
+		c.strategyPool.Put(strategy)
+	}
+}
+
+// GetCacheStats 获取缓存统计信息
+func (c *MarkdownChunker) GetCacheStats() map[string]any {
+	stats := make(map[string]any)
+
+	if c.strategyCache != nil {
+		stats["cache_size"] = c.strategyCache.Size()
+	}
+
+	if c.strategyPool != nil {
+		stats["pool_count"] = c.strategyPool.GetPoolCount()
+	}
+
+	return stats
+}
+
+// ClearStrategyCache 清空策略缓存
+func (c *MarkdownChunker) ClearStrategyCache() {
+	if c.strategyCache != nil {
+		c.strategyCache.Clear()
+	}
+
+	if c.strategyPool != nil {
+		c.strategyPool.Clear()
+	}
+
+	if c.logger != nil {
+		c.logger.Infow("策略缓存已清空",
+			"function", "ClearStrategyCache")
+	}
 }
 
 // GetErrors 获取处理过程中的所有错误

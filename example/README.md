@@ -98,7 +98,7 @@ cd table_processing
 go run table_example.go
 ```
 
-### 7. Logging Features (`logging_features/`) - NEW
+### 7. Logging Features (`logging_features/`)
 
 **Comprehensive logging functionality demonstration.**
 
@@ -119,9 +119,120 @@ cd logging_features
 go run logging_example.go
 ```
 
-## New Logging Features
+### 8. Custom Strategy (`custom_strategy/`) - NEW
 
-The library now includes comprehensive logging capabilities:
+**Demonstrates custom chunking strategy development.**
+
+**Features shown:**
+
+- Custom strategy implementation
+- Strategy builder usage
+- Rule-based chunking logic
+- Strategy registration and usage
+- Performance comparison with built-in strategies
+
+**Run:**
+
+```bash
+cd custom_strategy
+go run custom_strategy_example.go
+```
+
+### 9. Configuration Migration (`config_migration/`) - NEW
+
+**Shows how to migrate existing configurations to the new strategy system.**
+
+**Features shown:**
+
+- Configuration migration helpers
+- Backward compatibility
+- Strategy configuration
+- Migration validation
+
+**Run:**
+
+```bash
+cd config_migration
+go run config_migration_example.go
+```
+
+### 10. Strategy Examples (`strategy_examples/`) - NEW
+
+**Comprehensive demonstration of all chunking strategies.**
+
+**Features shown:**
+
+- All built-in strategies (element-level, hierarchical, document-level)
+- Dynamic strategy switching
+- Strategy performance comparison
+- Size constraints and filtering
+- Error handling with strategies
+- Best practices for strategy selection
+
+**Run:**
+
+```bash
+cd strategy_examples
+go run strategy_examples.go
+```
+
+## Chunking Strategies - NEW
+
+The library now supports multiple chunking strategies for different use cases:
+
+### Built-in Strategies
+
+#### Element-Level Strategy (Default)
+Processes each Markdown element individually, maintaining the original behavior.
+
+```go
+config := mc.DefaultConfig()
+config.ChunkingStrategy = mc.ElementLevelConfig()
+```
+
+#### Hierarchical Strategy
+Groups content by heading levels, creating chunks that contain a heading and all its subordinate content.
+
+```go
+config := mc.DefaultConfig()
+config.ChunkingStrategy = mc.HierarchicalConfig(3) // Max depth of 3 levels
+```
+
+#### Document-Level Strategy
+Treats the entire document as a single chunk.
+
+```go
+config := mc.DefaultConfig()
+config.ChunkingStrategy = mc.DocumentLevelConfig()
+```
+
+### Custom Strategies
+
+Create custom strategies using the builder pattern:
+
+```go
+builder := mc.NewCustomStrategyBuilder("my-strategy", "Custom chunking logic")
+builder.AddRule(
+    mc.HeadingLevelCondition{MinLevel: 1, MaxLevel: 2},
+    mc.CreateSeparateChunkAction{},
+    10, // High priority
+)
+customStrategy := builder.Build()
+```
+
+### Strategy Selection Guide
+
+| Use Case | Recommended Strategy | Reason |
+|----------|---------------------|---------|
+| Search indexing | Element-Level | Fine-grained matching |
+| Documentation | Hierarchical | Preserves section context |
+| RAG systems | Hierarchical | Maintains logical structure |
+| Document classification | Document-Level | Complete context |
+| Code analysis | Custom | Specialized requirements |
+
+## Logging Features
+
+The library includes comprehensive logging capabilities:
 
 ### Log Levels
 

@@ -309,3 +309,52 @@ func (pm *PerformanceMonitor) GetMemoryStats() runtime.MemStats {
 	runtime.ReadMemStats(&m)
 	return m
 }
+
+// RecordStrategyExecution 记录策略执行信息
+func (pm *PerformanceMonitor) RecordStrategyExecution(strategyName string, executionTime time.Duration, chunksGenerated int) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	if !pm.isRunning {
+		return
+	}
+
+	if pm.logger != nil {
+		pm.logger.Debugw("策略执行统计",
+			"strategy_name", strategyName,
+			"execution_time_ms", executionTime.Milliseconds(),
+			"execution_time_seconds", executionTime.Seconds(),
+			"chunks_generated", chunksGenerated,
+			"chunks_per_second", func() float64 {
+				if executionTime.Seconds() > 0 {
+					return float64(chunksGenerated) / executionTime.Seconds()
+				}
+				return 0
+			}(),
+			"function", "PerformanceMonitor.RecordStrategyExecution")
+
+		// 记录性能警告
+		if executionTime > 5*time.Second {
+			pm.logger.Warnw("策略执行时间较长",
+				"strategy_name", strategyName,
+				"execution_time_seconds", executionTime.Seconds(),
+				"chunks_generated", chunksGenerated,
+				"recommendation", "考虑优化策略实现或使用更高效的策略",
+				"function", "PerformanceMonitor.RecordStrategyExecution")
+		}
+
+		// 记录低效率警告
+		if executionTime.Seconds() > 0 {
+			chunksPerSecond := float64(chunksGenerated) / executionTime.Seconds()
+			if chunksPerSecond < 10 && chunksGenerated > 0 {
+				pm.logger.Warnw("策略执行效率较低",
+					"strategy_name", strategyName,
+					"chunks_per_second", chunksPerSecond,
+					"chunks_generated", chunksGenerated,
+					"execution_time_seconds", executionTime.Seconds(),
+					"recommendation", "考虑优化策略算法或检查文档复杂度",
+					"function", "PerformanceMonitor.RecordStrategyExecution")
+			}
+		}
+	}
+}

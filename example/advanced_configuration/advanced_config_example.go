@@ -90,12 +90,16 @@ def complex_algorithm(data):
 	fmt.Println("\n6. 块大小限制配置")
 	demonstrateChunkSizeLimits(testMarkdown)
 
-	// 示例 7: 日志功能配置
-	fmt.Println("\n7. 日志功能配置")
+	// 示例 7: 分块策略配置 (NEW)
+	fmt.Println("\n7. 分块策略配置")
+	demonstrateChunkingStrategies(testMarkdown)
+
+	// 示例 8: 日志功能配置
+	fmt.Println("\n8. 日志功能配置")
 	demonstrateLoggingConfiguration(testMarkdown)
 
-	// 示例 8: 完整的高级配置
-	fmt.Println("\n8. 完整的高级配置")
+	// 示例 9: 完整的高级配置
+	fmt.Println("\n9. 完整的高级配置")
 	demonstrateCompleteAdvancedConfiguration(testMarkdown)
 }
 
@@ -332,6 +336,132 @@ func demonstrateChunkSizeLimits(markdown string) {
 	}
 }
 
+// demonstrateChunkingStrategies 演示分块策略配置
+func demonstrateChunkingStrategies(markdown string) {
+	fmt.Println("分块策略配置演示:")
+
+	// 示例 1: 元素级策略（默认）
+	fmt.Println("  元素级策略（默认）:")
+	config1 := mc.DefaultConfig()
+	config1.ChunkingStrategy = mc.ElementLevelConfig()
+
+	chunker1 := mc.NewMarkdownChunkerWithConfig(config1)
+	chunks1, err := chunker1.ChunkDocument([]byte(markdown))
+	if err != nil {
+		log.Printf("    错误: %v", err)
+	} else {
+		fmt.Printf("    生成块数: %d\n", len(chunks1))
+		fmt.Printf("    块类型: ")
+		types := make(map[string]int)
+		for _, chunk := range chunks1 {
+			types[chunk.Type]++
+		}
+		for t, count := range types {
+			fmt.Printf("%s(%d) ", t, count)
+		}
+		fmt.Println()
+	}
+
+	// 示例 2: 层级策略
+	fmt.Println("  层级策略（深度2）:")
+	config2 := mc.DefaultConfig()
+	config2.ChunkingStrategy = mc.HierarchicalConfig(2)
+
+	chunker2 := mc.NewMarkdownChunkerWithConfig(config2)
+	chunks2, err := chunker2.ChunkDocument([]byte(markdown))
+	if err != nil {
+		log.Printf("    错误: %v", err)
+	} else {
+		fmt.Printf("    生成块数: %d\n", len(chunks2))
+		for i, chunk := range chunks2 {
+			preview := strings.ReplaceAll(chunk.Text, "\n", " ")
+			if len(preview) > 50 {
+				preview = preview[:50] + "..."
+			}
+			fmt.Printf("    块%d: %s (Level %d) - %s\n", i+1, chunk.Type, chunk.Level, preview)
+		}
+	}
+
+	// 示例 3: 文档级策略
+	fmt.Println("  文档级策略:")
+	config3 := mc.DefaultConfig()
+	config3.ChunkingStrategy = mc.DocumentLevelConfig()
+
+	chunker3 := mc.NewMarkdownChunkerWithConfig(config3)
+	chunks3, err := chunker3.ChunkDocument([]byte(markdown))
+	if err != nil {
+		log.Printf("    错误: %v", err)
+	} else {
+		fmt.Printf("    生成块数: %d\n", len(chunks3))
+		fmt.Printf("    文档大小: %d 字符\n", len(chunks3[0].Content))
+	}
+
+	// 示例 4: 带约束的层级策略
+	fmt.Println("  带大小约束的层级策略:")
+	constrainedConfig := mc.HierarchicalConfig(3)
+	constrainedConfig.MaxChunkSize = 500 // 最大块大小
+	constrainedConfig.MinChunkSize = 50  // 最小块大小
+	constrainedConfig.MergeEmpty = true  // 合并空章节
+
+	config4 := mc.DefaultConfig()
+	config4.ChunkingStrategy = constrainedConfig
+
+	chunker4 := mc.NewMarkdownChunkerWithConfig(config4)
+	chunks4, err := chunker4.ChunkDocument([]byte(markdown))
+	if err != nil {
+		log.Printf("    错误: %v", err)
+	} else {
+		fmt.Printf("    生成块数: %d\n", len(chunks4))
+		fmt.Printf("    块大小范围: %d - %d 字符\n",
+			getMinChunkSize(chunks4), getMaxChunkSize(chunks4))
+	}
+
+	// 示例 5: 动态策略切换
+	fmt.Println("  动态策略切换:")
+	chunker := mc.NewMarkdownChunker()
+
+	// 开始使用默认策略
+	chunks, _ := chunker.ChunkDocument([]byte(markdown))
+	fmt.Printf("    默认策略: %d 块\n", len(chunks))
+
+	// 切换到层级策略
+	chunker.SetStrategy("hierarchical", mc.HierarchicalConfig(2))
+	chunks, _ = chunker.ChunkDocument([]byte(markdown))
+	fmt.Printf("    层级策略: %d 块\n", len(chunks))
+
+	// 切换到文档级策略
+	chunker.SetStrategy("document-level", mc.DocumentLevelConfig())
+	chunks, _ = chunker.ChunkDocument([]byte(markdown))
+	fmt.Printf("    文档级策略: %d 块\n", len(chunks))
+}
+
+// Helper functions for strategy demonstration
+func getMinChunkSize(chunks []mc.Chunk) int {
+	if len(chunks) == 0 {
+		return 0
+	}
+	min := len(chunks[0].Content)
+	for _, chunk := range chunks[1:] {
+		if len(chunk.Content) < min {
+			min = len(chunk.Content)
+		}
+	}
+	return min
+}
+
+func getMaxChunkSize(chunks []mc.Chunk) int {
+	if len(chunks) == 0 {
+		return 0
+	}
+	max := len(chunks[0].Content)
+	for _, chunk := range chunks[1:] {
+		if len(chunk.Content) > max {
+			max = len(chunk.Content)
+		}
+	}
+	return max
+}
+
 // demonstrateLoggingConfiguration 演示日志功能配置
 func demonstrateLoggingConfiguration(markdown string) {
 	fmt.Println("日志功能配置演示:")
@@ -421,6 +551,13 @@ func demonstrateCompleteAdvancedConfiguration(markdown string) {
 	config.LogLevel = "INFO"
 	config.LogFormat = "json"
 	config.LogDirectory = "./demo-logs/complete"
+
+	// 分块策略配置 (NEW)
+	hierarchicalConfig := mc.HierarchicalConfig(3)
+	hierarchicalConfig.MaxChunkSize = 800 // 策略特定的大小限制
+	hierarchicalConfig.MinChunkSize = 100
+	hierarchicalConfig.MergeEmpty = true
+	config.ChunkingStrategy = hierarchicalConfig
 
 	// 自定义元数据提取器
 	config.CustomExtractors = []mc.MetadataExtractor{

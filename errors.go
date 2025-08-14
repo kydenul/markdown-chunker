@@ -26,6 +26,12 @@ const (
 	ErrorTypeConfigInvalid
 	// ErrorTypeChunkTooLarge 块过大错误
 	ErrorTypeChunkTooLarge
+	// ErrorTypeStrategyNotFound 策略未找到错误
+	ErrorTypeStrategyNotFound
+	// ErrorTypeStrategyConfigInvalid 策略配置无效错误
+	ErrorTypeStrategyConfigInvalid
+	// ErrorTypeStrategyExecutionFailed 策略执行失败错误
+	ErrorTypeStrategyExecutionFailed
 )
 
 // String 返回错误类型的字符串表示
@@ -43,6 +49,12 @@ func (et ErrorType) String() string {
 		return "ConfigInvalid"
 	case ErrorTypeChunkTooLarge:
 		return "ChunkTooLarge"
+	case ErrorTypeStrategyNotFound:
+		return "StrategyNotFound"
+	case ErrorTypeStrategyConfigInvalid:
+		return "StrategyConfigInvalid"
+	case ErrorTypeStrategyExecutionFailed:
+		return "StrategyExecutionFailed"
 	default:
 		return "Unknown"
 	}
@@ -174,6 +186,12 @@ func getLogLevelForErrorType(errorType ErrorType) string {
 		return "warn" // 配置错误通常是警告级别
 	case ErrorTypeChunkTooLarge:
 		return "warn" // 块过大通常是警告级别
+	case ErrorTypeStrategyNotFound:
+		return "error" // 策略未找到是错误级别
+	case ErrorTypeStrategyConfigInvalid:
+		return "warn" // 策略配置错误通常是警告级别
+	case ErrorTypeStrategyExecutionFailed:
+		return "error" // 策略执行失败是错误级别
 	default:
 		return "error" // 未知错误默认为错误级别
 	}

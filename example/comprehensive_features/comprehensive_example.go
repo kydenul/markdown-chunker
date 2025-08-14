@@ -18,6 +18,7 @@ func main() {
 
 	// 演示各种功能
 	demonstrateBasicUsage(complexMarkdown)
+	demonstrateChunkingStrategies(complexMarkdown) // NEW: Strategy demonstration
 	demonstrateAdvancedFeatures(complexMarkdown)
 	demonstrateErrorHandlingAndRecovery(complexMarkdown)
 	demonstratePerformanceMonitoring(complexMarkdown)
@@ -276,6 +277,78 @@ func demonstrateBasicUsage(markdown string) {
 	for chunkType, count := range typeCount {
 		fmt.Printf("    %s: %d\n", chunkType, count)
 	}
+}
+
+// demonstrateChunkingStrategies 演示分块策略
+func demonstrateChunkingStrategies(markdown string) {
+	fmt.Println("\n=== 2. 分块策略演示 ===")
+
+	strategies := []struct {
+		name   string
+		config *mc.StrategyConfig
+		desc   string
+	}{
+		{"元素级策略", mc.ElementLevelConfig(), "逐个元素分块（默认行为）"},
+		{"层级策略(深度2)", mc.HierarchicalConfig(2), "按标题层级分组内容"},
+		{"层级策略(深度3)", mc.HierarchicalConfig(3), "更深层级的内容分组"},
+		{"文档级策略", mc.DocumentLevelConfig(), "整个文档作为单个块"},
+	}
+
+	fmt.Printf("测试文档大小: %d 字节\n\n", len(markdown))
+
+	for i, strategy := range strategies {
+		fmt.Printf("%d. %s - %s\n", i+1, strategy.name, strategy.desc)
+
+		config := mc.DefaultConfig()
+		config.ChunkingStrategy = strategy.config
+
+		chunker := mc.NewMarkdownChunkerWithConfig(config)
+		start := time.Now()
+		chunks, err := chunker.ChunkDocument([]byte(markdown))
+		duration := time.Since(start)
+
+		if err != nil {
+			fmt.Printf("   错误: %v\n\n", err)
+			continue
+		}
+
+		stats := chunker.GetPerformanceStats()
+		fmt.Printf("   块数量: %d\n", len(chunks))
+		fmt.Printf("   处理时间: %v\n", duration)
+		fmt.Printf("   内存使用: %d KB\n", stats.MemoryUsed/1024)
+
+		// 显示前几个块的信息
+		fmt.Printf("   前3个块:\n")
+		for j, chunk := range chunks[:min(3, len(chunks))] {
+			preview := strings.ReplaceAll(chunk.Text, "\n", " ")
+			if len(preview) > 60 {
+				preview = preview[:60] + "..."
+			}
+			fmt.Printf("     %d. %s (Level %d): %s\n", j+1, chunk.Type, chunk.Level, preview)
+		}
+		if len(chunks) > 3 {
+			fmt.Printf("     ... 还有 %d 个块\n", len(chunks)-3)
+		}
+		fmt.Println()
+	}
+
+	// 演示动态策略切换
+	fmt.Println("动态策略切换演示:")
+	chunker := mc.NewMarkdownChunker()
+
+	// 开始使用元素级策略
+	chunks1, _ := chunker.ChunkDocument([]byte(markdown))
+	fmt.Printf("  元素级策略: %d 块\n", len(chunks1))
+
+	// 切换到层级策略
+	chunker.SetStrategy("hierarchical", mc.HierarchicalConfig(2))
+	chunks2, _ := chunker.ChunkDocument([]byte(markdown))
+	fmt.Printf("  层级策略: %d 块\n", len(chunks2))
+
+	// 切换到文档级策略
+	chunker.SetStrategy("document-level", mc.DocumentLevelConfig())
+	chunks3, _ := chunker.ChunkDocument([]byte(markdown))
+	fmt.Printf("  文档级策略: %d 块\n", len(chunks3))
 }
 
 // demonstrateAdvancedFeatures 演示高级功能
@@ -659,4 +732,12 @@ func demonstrateContentAnalysis(markdown string) {
 
 	jsonData, _ := json.MarshalIndent(summary, "    ", "  ")
 	fmt.Printf("    %s\n", string(jsonData))
+}
+
+// Helper functions
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

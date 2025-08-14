@@ -4,6 +4,7 @@ A Go library for intelligently splitting Markdown documents into semantic chunks
 
 ## Features
 
+- **Flexible Chunking Strategies**: Multiple built-in strategies (element-level, hierarchical, document-level) with support for custom strategies
 - **Semantic Chunking**: Splits Markdown documents based on content structure rather than arbitrary text length
 - **Multiple Content Types**: Supports headings, paragraphs, code blocks, tables, lists, blockquotes, and thematic breaks
 - **Rich Metadata**: Each chunk includes metadata like heading levels, word counts, code language, table dimensions, etc.
@@ -140,6 +141,521 @@ func main() {
 }
 ```
 
+## Chunking Strategies
+
+The library supports multiple chunking strategies to handle different use cases and document structures. You can choose from built-in strategies or create custom ones.
+
+### Built-in Strategies
+
+#### Element-Level Strategy (Default)
+
+The element-level strategy processes each Markdown element individually, maintaining the original behavior of the library.
+
+```go
+config := mc.DefaultConfig()
+config.ChunkingStrategy = mc.ElementLevelConfig()
+
+chunker := mc.NewMarkdownChunkerWithConfig(config)
+chunks, err := chunker.ChunkDocument(content)
+```
+
+**Use Cases:**
+- Fine-grained content analysis
+- Search indexing with precise matching
+- Content that doesn't have clear hierarchical structure
+
+#### Hierarchical Strategy
+
+The hierarchical strategy groups content by heading levels, creating chunks that contain a heading and all its subordinate content.
+
+```go
+config := mc.DefaultConfig()
+config.ChunkingStrategy = mc.HierarchicalConfig(3) // Max depth of 3 levels
+
+chunker := mc.NewMarkdownChunkerWithConfig(config)
+chunks, err := chunker.ChunkDocument(content)
+```
+
+**Configuration Options:**
+- `MaxDepth`: Maximum heading level to consider (1-6)
+- `MinDepth`: Minimum heading level to start chunking
+- `MergeEmpty`: Whether to merge empty sections with parent
+- `MinChunkSize`: Minimum size for hierarchical chunks
+- `MaxChunkSize`: Maximum size before splitting hierarchical chunks
+
+**Use Cases:**
+- Documentation with clear section structure
+- Books and articles with hierarchical organization
+- Content where context within sections is important
+
+#### Document-Level Strategy
+
+The document-level strategy treats the entire document as a single chunk.
+
+```go
+config := mc.DefaultConfig()
+config.ChunkingStrategy = mc.DocumentLevelConfig()
+
+chunker := mc.NewMarkdownChunkerWithConfig(config)
+chunks, err := chunker.ChunkDocument(content)
+```
+
+**Use Cases:**
+- Small documents that should be processed as a whole
+- Document classification tasks
+- When you need complete document context
+
+### Strategy Configuration Examples
+
+#### Basic Strategy Usage
+
+```go
+package main
+
+import (
+    "fmt"
+    mc "github.com/kydenul/markdown-chunker"
+)
+
+func main() {
+    markdown := `# User Guide
+
+Welcome to our application.
+
+## Getting Started
+
+Follow these steps to begin.
+
+### Installation
+
+Run the following command:
+
+` + "```bash" + `
+npm install our-app
+` + "```" + `
+
+### Configuration
+
+Edit your config file:
+
+` + "```json" + `
+{
+  "theme": "dark",
+  "language": "en"
+}
+` + "```" + `
+
+## Advanced Features
+
+Learn about advanced functionality.
+
+### Custom Themes
+
+Create your own themes.
+
+### Plugins
+
+Extend functionality with plugins.`
+
+    // Element-level strategy (default)
+    fmt.Println("=== Element-Level Strategy ===")
+    config1 := mc.DefaultConfig()
+    config1.ChunkingStrategy = mc.ElementLevelConfig()
+    
+    chunker1 := mc.NewMarkdownChunkerWithConfig(config1)
+    chunks1, _ := chunker1.ChunkDocument([]byte(markdown))
+    
+    fmt.Printf("Chunks: %d\n", len(chunks1))
+    for i, chunk := range chunks1 {
+        fmt.Printf("  %d. %s: %s\n", i+1, chunk.Type, 
+            truncateText(chunk.Text, 50))
+    }
+
+    // Hierarchical strategy
+    fmt.Println("\n=== Hierarchical Strategy (Max Depth 2) ===")
+    config2 := mc.DefaultConfig()
+    config2.ChunkingStrategy = mc.HierarchicalConfig(2)
+    
+    chunker2 := mc.NewMarkdownChunkerWithConfig(config2)
+    chunks2, _ := chunker2.ChunkDocument([]byte(markdown))
+    
+    fmt.Printf("Chunks: %d\n", len(chunks2))
+    for i, chunk := range chunks2 {
+        fmt.Printf("  %d. %s (Level %d): %s\n", i+1, chunk.Type, 
+            chunk.Level, truncateText(chunk.Text, 50))
+    }
+
+    // Document-level strategy
+    fmt.Println("\n=== Document-Level Strategy ===")
+    config3 := mc.DefaultConfig()
+    config3.ChunkingStrategy = mc.DocumentLevelConfig()
+    
+    chunker3 := mc.NewMarkdownChunkerWithConfig(config3)
+    chunks3, _ := chunker3.ChunkDocument([]byte(markdown))
+    
+    fmt.Printf("Chunks: %d\n", len(chunks3))
+    fmt.Printf("  1. %s: %d characters\n", chunks3[0].Type, len(chunks3[0].Content))
+}
+
+func truncateText(text string, maxLen int) string {
+    if len(text) <= maxLen {
+        return text
+    }
+    return text[:maxLen] + "..."
+}
+```
+
+#### Dynamic Strategy Switching
+
+```go
+package main
+
+import (
+    "fmt"
+    mc "github.com/kydenul/markdown-chunker"
+)
+
+func main() {
+    chunker := mc.NewMarkdownChunker()
+    content := []byte(`# Document
+    
+## Section 1
+Content for section 1.
+
+## Section 2  
+Content for section 2.`)
+
+    // Start with element-level strategy
+    chunks1, _ := chunker.ChunkDocument(content)
+    fmt.Printf("Element-level: %d chunks\n", len(chunks1))
+
+    // Switch to hierarchical strategy
+    err := chunker.SetStrategy("hierarchical", mc.HierarchicalConfig(2))
+    if err != nil {
+        panic(err)
+    }
+    
+    chunks2, _ := chunker.ChunkDocument(content)
+    fmt.Printf("Hierarchical: %d chunks\n", len(chunks2))
+
+    // Switch to document-level strategy
+    err = chunker.SetStrategy("document-level", mc.DocumentLevelConfig())
+    if err != nil {
+        panic(err)
+    }
+    
+    chunks3, _ := chunker.ChunkDocument(content)
+    fmt.Printf("Document-level: %d chunks\n", len(chunks3))
+}
+```
+
+### Custom Strategies
+
+You can create custom chunking strategies by implementing the `ChunkingStrategy` interface or using the strategy builder.
+
+#### Using the Strategy Builder
+
+```go
+package main
+
+import (
+    "fmt"
+    mc "github.com/kydenul/markdown-chunker"
+)
+
+func main() {
+    // Create a custom strategy that:
+    // 1. Creates separate chunks for H1 and H2 headings
+    // 2. Merges paragraphs and lists with their parent heading
+    // 3. Creates separate chunks for code blocks and tables
+    
+    builder := mc.NewCustomStrategyBuilder("content-focused", 
+        "Groups content by importance, separating code and tables")
+    
+    // High priority: Separate chunks for major headings
+    builder.AddRule(
+        mc.HeadingLevelCondition{MinLevel: 1, MaxLevel: 2},
+        mc.CreateSeparateChunkAction{},
+        10,
+    )
+    
+    // High priority: Separate chunks for code and tables
+    builder.AddRule(
+        mc.ContentTypeCondition{Types: []string{"code", "table"}},
+        mc.CreateSeparateChunkAction{},
+        9,
+    )
+    
+    // Medium priority: Merge text content with parent
+    builder.AddRule(
+        mc.ContentTypeCondition{Types: []string{"paragraph", "list", "blockquote"}},
+        mc.MergeWithParentAction{},
+        5,
+    )
+    
+    // Low priority: Skip minor headings (merge with parent)
+    builder.AddRule(
+        mc.HeadingLevelCondition{MinLevel: 3, MaxLevel: 6},
+        mc.MergeWithParentAction{},
+        3,
+    )
+    
+    customStrategy := builder.Build()
+    
+    // Register and use the custom strategy
+    chunker := mc.NewMarkdownChunker()
+    err := chunker.RegisterStrategy(customStrategy)
+    if err != nil {
+        panic(err)
+    }
+    
+    err = chunker.SetStrategy("content-focused", nil)
+    if err != nil {
+        panic(err)
+    }
+    
+    markdown := `# Main Title
+
+Introduction paragraph.
+
+## Important Section
+
+Some content here.
+
+### Details
+
+More details.
+
+` + "```go" + `
+func example() {
+    fmt.Println("code")
+}
+` + "```" + `
+
+| Feature | Status |
+|---------|--------|
+| Custom  | Active |`
+
+    chunks, err := chunker.ChunkDocument([]byte(markdown))
+    if err != nil {
+        panic(err)
+    }
+    
+    fmt.Printf("Custom strategy created %d chunks:\n", len(chunks))
+    for i, chunk := range chunks {
+        fmt.Printf("  %d. %s: %s\n", i+1, chunk.Type, 
+            truncateText(chunk.Text, 60))
+    }
+}
+```
+
+#### Implementing a Custom Strategy Interface
+
+```go
+package main
+
+import (
+    "fmt"
+    mc "github.com/kydenul/markdown-chunker"
+    "github.com/yuin/goldmark/ast"
+)
+
+// CodeFocusedStrategy creates separate chunks for all code blocks
+// and merges everything else by heading level
+type CodeFocusedStrategy struct {
+    config *mc.StrategyConfig
+}
+
+func (s *CodeFocusedStrategy) GetName() string {
+    return "code-focused"
+}
+
+func (s *CodeFocusedStrategy) GetDescription() string {
+    return "Separates all code blocks and groups other content hierarchically"
+}
+
+func (s *CodeFocusedStrategy) ChunkDocument(doc ast.Node, source []byte, chunker *mc.MarkdownChunker) ([]mc.Chunk, error) {
+    var chunks []mc.Chunk
+    chunkID := 0
+    
+    // First pass: extract all code blocks as separate chunks
+    ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+        if !entering {
+            return ast.WalkContinue, nil
+        }
+        
+        if codeBlock, ok := node.(*ast.FencedCodeBlock); ok {
+            if chunk := chunker.ProcessCodeBlock(codeBlock, chunkID); chunk != nil {
+                chunks = append(chunks, *chunk)
+                chunkID++
+            }
+        }
+        
+        return ast.WalkContinue, nil
+    })
+    
+    // Second pass: process remaining content hierarchically
+    hierarchicalStrategy := &mc.HierarchicalStrategy{}
+    hierarchicalChunks, err := hierarchicalStrategy.ChunkDocument(doc, source, chunker)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Filter out code blocks from hierarchical chunks and add them
+    for _, chunk := range hierarchicalChunks {
+        if chunk.Type != "code" {
+            chunk.ID = chunkID
+            chunks = append(chunks, chunk)
+            chunkID++
+        }
+    }
+    
+    return chunks, nil
+}
+
+func (s *CodeFocusedStrategy) ValidateConfig(config *mc.StrategyConfig) error {
+    // No specific validation needed for this strategy
+    return nil
+}
+
+func (s *CodeFocusedStrategy) Clone() mc.ChunkingStrategy {
+    return &CodeFocusedStrategy{
+        config: s.config,
+    }
+}
+
+func main() {
+    chunker := mc.NewMarkdownChunker()
+    
+    // Register custom strategy
+    customStrategy := &CodeFocusedStrategy{}
+    err := chunker.RegisterStrategy(customStrategy)
+    if err != nil {
+        panic(err)
+    }
+    
+    // Use custom strategy
+    err = chunker.SetStrategy("code-focused", nil)
+    if err != nil {
+        panic(err)
+    }
+    
+    markdown := `# API Documentation
+
+This document describes our API.
+
+## Authentication
+
+Use API keys for authentication.
+
+` + "```bash" + `
+curl -H "Authorization: Bearer TOKEN" https://api.example.com
+` + "```" + `
+
+## Endpoints
+
+### Users
+
+Get user information:
+
+` + "```javascript" + `
+fetch('/api/users/123')
+  .then(response => response.json())
+  .then(data => console.log(data));
+` + "```" + `
+
+### Posts
+
+Create a new post:
+
+` + "```python" + `
+import requests
+
+response = requests.post('/api/posts', json={
+    'title': 'My Post',
+    'content': 'Post content here'
+})
+` + "```"
+
+    chunks, err := chunker.ChunkDocument([]byte(markdown))
+    if err != nil {
+        panic(err)
+    }
+    
+    fmt.Printf("Code-focused strategy created %d chunks:\n", len(chunks))
+    for i, chunk := range chunks {
+        fmt.Printf("  %d. %s", i+1, chunk.Type)
+        if chunk.Type == "code" {
+            if lang, exists := chunk.Metadata["language"]; exists {
+                fmt.Printf(" (%s)", lang)
+            }
+        }
+        fmt.Printf(": %s\n", truncateText(chunk.Text, 50))
+    }
+}
+```
+
+### Strategy Best Practices
+
+#### Choosing the Right Strategy
+
+1. **Element-Level Strategy**
+   - Use for: Search indexing, fine-grained analysis, content without clear structure
+   - Pros: Maximum granularity, consistent chunk sizes
+   - Cons: May break logical content groupings
+
+2. **Hierarchical Strategy**
+   - Use for: Documentation, books, structured content
+   - Pros: Preserves logical structure, maintains context
+   - Cons: Variable chunk sizes, may create very large chunks
+
+3. **Document-Level Strategy**
+   - Use for: Small documents, document classification, full-context analysis
+   - Pros: Complete context, simple processing
+   - Cons: Not suitable for large documents, limited granularity
+
+4. **Custom Strategies**
+   - Use for: Specific business requirements, specialized content types
+   - Pros: Tailored to exact needs, maximum flexibility
+   - Cons: Requires development effort, needs testing
+
+#### Performance Considerations
+
+```go
+// For high-performance scenarios, configure strategy caching
+config := mc.DefaultConfig()
+config.ChunkingStrategy = mc.HierarchicalConfig(3)
+config.PerformanceMode = mc.PerformanceModeSpeedOptimized
+config.EnableObjectPooling = true
+
+// For memory-constrained environments
+config.PerformanceMode = mc.PerformanceModeMemoryOptimized
+config.MemoryLimit = 100 * 1024 * 1024 // 100MB limit
+```
+
+#### Error Handling with Strategies
+
+```go
+config := mc.DefaultConfig()
+config.ChunkingStrategy = mc.HierarchicalConfig(3)
+config.ErrorHandling = mc.ErrorModePermissive // Continue on strategy errors
+
+chunker := mc.NewMarkdownChunkerWithConfig(config)
+chunks, err := chunker.ChunkDocument(content)
+
+if err != nil {
+    // Handle strategy-specific errors
+    if chunkerErr, ok := err.(*mc.ChunkerError); ok {
+        if chunkerErr.Type == mc.ErrorTypeStrategyExecutionFailed {
+            fmt.Printf("Strategy error: %s\n", chunkerErr.Message)
+            // Fallback to element-level strategy
+            chunker.SetStrategy("element-level", mc.ElementLevelConfig())
+            chunks, err = chunker.ChunkDocument(content)
+        }
+    }
+}
+```
+
 ### Logging Usage
 
 ```go
@@ -238,11 +754,36 @@ type ChunkerConfig struct {
     MemoryLimit         int64                  // Memory usage limit in bytes
     EnableObjectPooling bool                   // Enable object pooling for performance
     
+    // Strategy configuration
+    ChunkingStrategy    *StrategyConfig        // Chunking strategy configuration
+    
     // Logging configuration
     LogLevel            string                 // Log level: DEBUG, INFO, WARN, ERROR
     EnableLog           bool                   // Enable/disable logging
     LogFormat           string                 // Log format: console, json
     LogDirectory        string                 // Log file directory
+}
+```
+
+### StrategyConfig
+
+```go
+type StrategyConfig struct {
+    Name        string                 `json:"name"`         // Strategy name
+    Parameters  map[string]interface{} `json:"parameters"`   // Strategy parameters
+    
+    // Hierarchical strategy specific
+    MaxDepth    int  `json:"max_depth,omitempty"`     // Maximum heading level depth
+    MinDepth    int  `json:"min_depth,omitempty"`     // Minimum heading level depth
+    MergeEmpty  bool `json:"merge_empty,omitempty"`   // Merge empty sections
+    
+    // Size constraints
+    MinChunkSize int `json:"min_chunk_size,omitempty"` // Minimum chunk size
+    MaxChunkSize int `json:"max_chunk_size,omitempty"` // Maximum chunk size
+    
+    // Content filtering
+    IncludeTypes []string `json:"include_types,omitempty"` // Include content types
+    ExcludeTypes []string `json:"exclude_types,omitempty"` // Exclude content types
 }
 ```
 
@@ -339,6 +880,74 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error)
 ```
 
 Processes a Markdown document and returns an array of semantic chunks.
+
+### Strategy Management Functions
+
+#### SetStrategy
+
+```go
+func (c *MarkdownChunker) SetStrategy(strategyName string, config *StrategyConfig) error
+```
+
+Sets the chunking strategy for the chunker instance.
+
+#### RegisterStrategy
+
+```go
+func (c *MarkdownChunker) RegisterStrategy(strategy ChunkingStrategy) error
+```
+
+Registers a custom chunking strategy.
+
+#### GetAvailableStrategies
+
+```go
+func (c *MarkdownChunker) GetAvailableStrategies() []string
+```
+
+Returns a list of all available strategy names.
+
+#### GetCurrentStrategy
+
+```go
+func (c *MarkdownChunker) GetCurrentStrategy() string
+```
+
+Returns the name of the currently active strategy.
+
+### Strategy Configuration Functions
+
+#### ElementLevelConfig
+
+```go
+func ElementLevelConfig() *StrategyConfig
+```
+
+Creates configuration for element-level chunking strategy.
+
+#### HierarchicalConfig
+
+```go
+func HierarchicalConfig(maxDepth int) *StrategyConfig
+```
+
+Creates configuration for hierarchical chunking strategy with specified maximum depth.
+
+#### DocumentLevelConfig
+
+```go
+func DocumentLevelConfig() *StrategyConfig
+```
+
+Creates configuration for document-level chunking strategy.
+
+#### CustomStrategyBuilder
+
+```go
+func NewCustomStrategyBuilder(name, description string) *CustomStrategyBuilder
+```
+
+Creates a new builder for custom chunking strategies.
 
 ### Error Handling Functions
 
@@ -808,6 +1417,166 @@ func extractAllLinks(chunks []mc.Chunk) []mc.Link {
 }
 ```
 
+## Migration Guide
+
+### Upgrading to Strategy System
+
+The chunking strategy system is fully backward compatible. Existing code will continue to work without changes, using the element-level strategy by default.
+
+#### Existing Code (Still Works)
+
+```go
+// This continues to work exactly as before
+chunker := mc.NewMarkdownChunker()
+chunks, err := chunker.ChunkDocument(content)
+```
+
+#### Migrating to Explicit Strategy Configuration
+
+```go
+// Explicitly specify the same behavior as before
+config := mc.DefaultConfig()
+config.ChunkingStrategy = mc.ElementLevelConfig()
+
+chunker := mc.NewMarkdownChunkerWithConfig(config)
+chunks, err := chunker.ChunkDocument(content)
+```
+
+#### Upgrading to Hierarchical Strategy
+
+```go
+// Switch to hierarchical chunking for better structure
+config := mc.DefaultConfig()
+config.ChunkingStrategy = mc.HierarchicalConfig(3) // Max 3 heading levels
+
+chunker := mc.NewMarkdownChunkerWithConfig(config)
+chunks, err := chunker.ChunkDocument(content)
+```
+
+### Configuration Migration
+
+If you have existing configuration files, you can migrate them using the built-in migration helper:
+
+```go
+// Load your existing configuration
+oldConfig := loadExistingConfig() // Your existing config loading
+
+// Migrate to new format
+newConfig := mc.MigrateConfig(oldConfig)
+
+// The migrated config will have element-level strategy by default
+chunker := mc.NewMarkdownChunkerWithConfig(newConfig)
+```
+
+### Common Migration Patterns
+
+#### From Fixed Processing to Strategy-Based
+
+**Before:**
+```go
+chunker := mc.NewMarkdownChunker()
+chunks, err := chunker.ChunkDocument(content)
+
+// Process all chunks the same way
+for _, chunk := range chunks {
+    processChunk(chunk)
+}
+```
+
+**After:**
+```go
+config := mc.DefaultConfig()
+
+// Choose strategy based on content type
+if isDocumentation(content) {
+    config.ChunkingStrategy = mc.HierarchicalConfig(3)
+} else if isSmallDocument(content) {
+    config.ChunkingStrategy = mc.DocumentLevelConfig()
+} else {
+    config.ChunkingStrategy = mc.ElementLevelConfig()
+}
+
+chunker := mc.NewMarkdownChunkerWithConfig(config)
+chunks, err := chunker.ChunkDocument(content)
+
+// Process chunks with strategy-aware logic
+for _, chunk := range chunks {
+    processChunkWithStrategy(chunk, config.ChunkingStrategy.Name)
+}
+```
+
+#### From Manual Grouping to Hierarchical Strategy
+
+**Before:**
+```go
+chunker := mc.NewMarkdownChunker()
+chunks, err := chunker.ChunkDocument(content)
+
+// Manually group chunks by headings
+groupedChunks := groupChunksByHeading(chunks)
+```
+
+**After:**
+```go
+config := mc.DefaultConfig()
+config.ChunkingStrategy = mc.HierarchicalConfig(2) // Group by H1 and H2
+
+chunker := mc.NewMarkdownChunkerWithConfig(config)
+chunks, err := chunker.ChunkDocument(content)
+
+// Chunks are already grouped hierarchically
+for _, chunk := range chunks {
+    if chunk.Type == "heading" {
+        fmt.Printf("Section: %s (Level %d)\n", chunk.Text, chunk.Level)
+    }
+}
+```
+
+### Breaking Changes
+
+There are no breaking changes in the public API. All existing functions and types remain unchanged. The strategy system is additive and optional.
+
+### Performance Considerations During Migration
+
+- **Element-level strategy**: Same performance as before
+- **Hierarchical strategy**: Slightly higher memory usage due to structure building
+- **Document-level strategy**: Lower memory usage for small documents
+- **Custom strategies**: Performance depends on implementation
+
+### Testing Your Migration
+
+```go
+func TestMigration(t *testing.T) {
+    content := []byte(`# Test Document
+    
+## Section 1
+Content here.
+
+## Section 2  
+More content.`)
+
+    // Test that old behavior is preserved
+    oldChunker := mc.NewMarkdownChunker()
+    oldChunks, err := oldChunker.ChunkDocument(content)
+    assert.NoError(t, err)
+
+    // Test that explicit element-level config produces same results
+    config := mc.DefaultConfig()
+    config.ChunkingStrategy = mc.ElementLevelConfig()
+    newChunker := mc.NewMarkdownChunkerWithConfig(config)
+    newChunks, err := newChunker.ChunkDocument(content)
+    assert.NoError(t, err)
+
+    // Should produce identical results
+    assert.Equal(t, len(oldChunks), len(newChunks))
+    for i, oldChunk := range oldChunks {
+        assert.Equal(t, oldChunk.Type, newChunks[i].Type)
+        assert.Equal(t, oldChunk.Content, newChunks[i].Content)
+        assert.Equal(t, oldChunk.Text, newChunks[i].Text)
+    }
+}
+```
+
 ## Use Cases
 
 - **Documentation Processing**: Break down large documentation into searchable chunks with precise position tracking
@@ -923,7 +1692,20 @@ type PerformanceStats struct {
 
 ## Changelog
 
-### v2.1.0 (Latest)
+### v3.0.0 (Latest)
+
+- **Flexible Chunking Strategies**: Multiple built-in strategies (element-level, hierarchical, document-level)
+- **Custom Strategy Support**: Create custom chunking strategies using builder pattern or interface implementation
+- **Strategy Registry**: Register, manage, and switch between different chunking strategies
+- **Hierarchical Chunking**: Group content by heading levels with configurable depth and merging options
+- **Document-Level Chunking**: Process entire documents as single chunks for specific use cases
+- **Dynamic Strategy Switching**: Change strategies at runtime without recreating chunker instances
+- **Strategy Configuration**: Rich configuration options for each strategy type
+- **Performance Optimization**: Strategy-specific caching and memory optimization
+- **Backward Compatibility**: Full compatibility with existing code - no breaking changes
+- **Migration Tools**: Built-in configuration migration helpers
+
+### v2.1.0
 
 - **Comprehensive Logging System**: Configurable logging with multiple levels (DEBUG, INFO, WARN, ERROR)
 - **Multiple Log Formats**: Support for console and JSON log formats
