@@ -531,7 +531,7 @@ func ValidateConfig(config *ChunkerConfig) error {
 			"expected", "non-nil ChunkerConfig",
 			"actual", "nil")
 
-		return NewChunkerError(ErrorTypeConfigInvalid, "配置对象不能为空", nil).
+		return NewChunkerError(ErrorTypeConfigInvalid, "config cannot be nil", nil).
 			WithContext("function", "ValidateConfig").
 			WithContext("expected", "non-nil ChunkerConfig").
 			WithContext("actual", "nil")
@@ -562,7 +562,7 @@ func ValidateConfig(config *ChunkerConfig) error {
 			"minimum_allowed", 0,
 			"error_type", "invalid_chunk_size")
 
-		return NewChunkerError(ErrorTypeConfigInvalid, "最大块大小不能为负数", nil).
+		return NewChunkerError(ErrorTypeConfigInvalid, "MaxChunkSize cannot be negative", nil).
 			WithContext("function", "ValidateConfig").
 			WithContext("field", "MaxChunkSize").
 			WithContext("value", config.MaxChunkSize).
@@ -595,12 +595,12 @@ func ValidateConfig(config *ChunkerConfig) error {
 					"valid_types", validTypesList,
 					"error_type", "invalid_content_type")
 
-				return NewChunkerError(ErrorTypeConfigInvalid, "无效的内容类型配置", nil).
+				return NewChunkerError(ErrorTypeConfigInvalid, "invalid content type", nil).
 					WithContext("function", "ValidateConfig").
 					WithContext("field", "EnabledTypes").
 					WithContext("invalid_type", typeName).
 					WithContext("valid_types", validTypesList).
-					WithContext("recommendation", "请使用有效的内容类型名称")
+					WithContext("recommendation", "please use valid content type names")
 			}
 		}
 
@@ -1730,10 +1730,12 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 			WithContext("validation_step", "input_check").
 			WithContext("expected", "non-nil byte slice").
 			WithContext("actual", "nil")
-		if handlerErr := c.errorHandler.HandleError(err); handlerErr != nil {
-			return nil, handlerErr
-		}
-		return []Chunk{}, nil
+
+		// 记录错误到错误处理器
+		c.errorHandler.HandleError(err)
+
+		// 对于 nil 输入，总是返回错误，不管错误处理模式如何
+		return nil, err
 	}
 
 	// 记录空文档处理
@@ -1853,7 +1855,9 @@ func (c *MarkdownChunker) ChunkDocument(content []byte) ([]Chunk, error) {
 				WithContext("function", "ChunkDocument").
 				WithContext("chunk_id", chunk.ID).
 				WithContext("chunk_type", chunk.Type).
+				WithContext("chunk_size", len(chunk.Content)).
 				WithContext("chunk_size_bytes", len(chunk.Content)).
+				WithContext("max_size", c.config.MaxChunkSize).
 				WithContext("max_size_bytes", c.config.MaxChunkSize).
 				WithContext("size_ratio", float64(len(chunk.Content))/float64(c.config.MaxChunkSize)).
 				WithContext("content_preview", chunk.Content[:min(100, len(chunk.Content))]).
@@ -2541,6 +2545,11 @@ func (c *MarkdownChunker) processHeading(heading *ast.Heading, id int) *Chunk {
 			"heading_level": fmt.Sprintf("%d", heading.Level),
 			"level":         fmt.Sprintf("%d", heading.Level), // 为了兼容性
 			"word_count":    fmt.Sprintf("%d", len(strings.Fields(text))),
+			// 添加位置信息到元数据以保持向后兼容性
+			"line_start": fmt.Sprintf("%d", position.StartLine),
+			"line_end":   fmt.Sprintf("%d", position.EndLine),
+			"char_start": fmt.Sprintf("%d", position.StartCol),
+			"char_end":   fmt.Sprintf("%d", position.EndCol),
 		},
 	}
 }
@@ -2590,6 +2599,11 @@ func (c *MarkdownChunker) processParagraph(para *ast.Paragraph, id int) *Chunk {
 		Metadata: map[string]string{
 			"word_count": fmt.Sprintf("%d", len(strings.Fields(text))),
 			"char_count": fmt.Sprintf("%d", len(text)),
+			// 添加位置信息到元数据以保持向后兼容性
+			"line_start": fmt.Sprintf("%d", position.StartLine),
+			"line_end":   fmt.Sprintf("%d", position.EndLine),
+			"char_start": fmt.Sprintf("%d", position.StartCol),
+			"char_end":   fmt.Sprintf("%d", position.EndCol),
 		},
 	}
 }
@@ -2674,6 +2688,11 @@ func (c *MarkdownChunker) processCodeBlock(code ast.Node, id int) *Chunk {
 		Metadata: map[string]string{
 			"language":   language,
 			"line_count": fmt.Sprintf("%d", lineCount),
+			// 添加位置信息到元数据以保持向后兼容性
+			"line_start": fmt.Sprintf("%d", position.StartLine),
+			"line_end":   fmt.Sprintf("%d", position.EndLine),
+			"char_start": fmt.Sprintf("%d", position.StartCol),
+			"char_end":   fmt.Sprintf("%d", position.EndCol),
 		},
 	}
 }
@@ -2743,6 +2762,12 @@ func (c *MarkdownChunker) processTable(table *extast.Table, id int) *Chunk {
 
 	c.logWithContext("debug", "表格内容提取完成", completeTableLogCtx)
 
+	// 添加位置信息到元数据以保持向后兼容性
+	metadata["line_start"] = fmt.Sprintf("%d", position.StartLine)
+	metadata["line_end"] = fmt.Sprintf("%d", position.EndLine)
+	metadata["char_start"] = fmt.Sprintf("%d", position.StartCol)
+	metadata["char_end"] = fmt.Sprintf("%d", position.EndCol)
+
 	return &Chunk{
 		ID:       id,
 		Type:     "table",
@@ -2810,6 +2835,11 @@ func (c *MarkdownChunker) processList(list *ast.List, id int) *Chunk {
 		Metadata: map[string]string{
 			"list_type":  listType,
 			"item_count": fmt.Sprintf("%d", itemCount),
+			// 添加位置信息到元数据以保持向后兼容性
+			"line_start": fmt.Sprintf("%d", position.StartLine),
+			"line_end":   fmt.Sprintf("%d", position.EndLine),
+			"char_start": fmt.Sprintf("%d", position.StartCol),
+			"char_end":   fmt.Sprintf("%d", position.EndCol),
 		},
 	}
 }
@@ -2864,6 +2894,11 @@ func (c *MarkdownChunker) processBlockquote(quote *ast.Blockquote, id int) *Chun
 		Hash:     hash,
 		Metadata: map[string]string{
 			"word_count": fmt.Sprintf("%d", len(strings.Fields(text))),
+			// 添加位置信息到元数据以保持向后兼容性
+			"line_start": fmt.Sprintf("%d", position.StartLine),
+			"line_end":   fmt.Sprintf("%d", position.EndLine),
+			"char_start": fmt.Sprintf("%d", position.StartCol),
+			"char_end":   fmt.Sprintf("%d", position.EndCol),
 		},
 	}
 }
@@ -2902,6 +2937,11 @@ func (c *MarkdownChunker) processThematicBreak(hr *ast.ThematicBreak, id int) *C
 		Hash:     hash,
 		Metadata: map[string]string{
 			"type": "horizontal_rule",
+			// 添加位置信息到元数据以保持向后兼容性
+			"line_start": fmt.Sprintf("%d", position.StartLine),
+			"line_end":   fmt.Sprintf("%d", position.EndLine),
+			"char_start": fmt.Sprintf("%d", position.StartCol),
+			"char_end":   fmt.Sprintf("%d", position.EndCol),
 		},
 	}
 }

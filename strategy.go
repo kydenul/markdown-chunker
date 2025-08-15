@@ -883,6 +883,11 @@ func (s *ElementLevelStrategy) ChunkDocument(doc ast.Node, source []byte, chunke
 		if chunk := chunker.processNode(child, chunkID); chunk != nil {
 			// 应用策略特定的过滤和处理
 			if s.shouldIncludeChunk(chunk) {
+				// 添加策略标识到元数据
+				if chunk.Metadata == nil {
+					chunk.Metadata = make(map[string]string)
+				}
+				chunk.Metadata["strategy"] = s.GetName()
 				chunks = append(chunks, *chunk)
 				chunkID++
 			}

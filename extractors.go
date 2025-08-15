@@ -38,7 +38,7 @@ func (e *LinkExtractor) Extract(node ast.Node, source []byte) map[string]string 
 
 // SupportedTypes 返回支持的内容类型
 func (e *LinkExtractor) SupportedTypes() []string {
-	return []string{"paragraph", "heading", "blockquote", "list"}
+	return []string{"paragraph", "heading", "blockquote", "list", "code", "table"}
 }
 
 // ImageExtractor 图片提取器

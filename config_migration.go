@@ -108,30 +108,81 @@ func migrateV2Config(config *ChunkerConfig) (*ConfigMigrationResult, error) {
 		}, nil
 	}
 
+	// 创建配置的深拷贝，避免修改原配置
+	newConfig := &ChunkerConfig{
+		MaxChunkSize:        config.MaxChunkSize,
+		EnabledTypes:        make(map[string]bool),
+		CustomExtractors:    make([]MetadataExtractor, len(config.CustomExtractors)),
+		ErrorHandling:       config.ErrorHandling,
+		PerformanceMode:     config.PerformanceMode,
+		FilterEmptyChunks:   config.FilterEmptyChunks,
+		PreserveWhitespace:  config.PreserveWhitespace,
+		MemoryLimit:         config.MemoryLimit,
+		EnableObjectPooling: config.EnableObjectPooling,
+		LogLevel:            config.LogLevel,
+		EnableLog:           config.EnableLog,
+		LogFormat:           config.LogFormat,
+		LogDirectory:        config.LogDirectory,
+	}
+
+	// 深拷贝 EnabledTypes
+	if config.EnabledTypes != nil {
+		for k, v := range config.EnabledTypes {
+			newConfig.EnabledTypes[k] = v
+		}
+	}
+
+	// 深拷贝 CustomExtractors
+	copy(newConfig.CustomExtractors, config.CustomExtractors)
+
+	// 深拷贝策略配置
+	if config.ChunkingStrategy != nil {
+		newConfig.ChunkingStrategy = &StrategyConfig{
+			Name:         config.ChunkingStrategy.Name,
+			Parameters:   make(map[string]interface{}),
+			MaxDepth:     config.ChunkingStrategy.MaxDepth,
+			MinDepth:     config.ChunkingStrategy.MinDepth,
+			MergeEmpty:   config.ChunkingStrategy.MergeEmpty,
+			MinChunkSize: config.ChunkingStrategy.MinChunkSize,
+			MaxChunkSize: config.ChunkingStrategy.MaxChunkSize,
+			IncludeTypes: make([]string, len(config.ChunkingStrategy.IncludeTypes)),
+			ExcludeTypes: make([]string, len(config.ChunkingStrategy.ExcludeTypes)),
+		}
+
+		// 深拷贝 Parameters
+		for k, v := range config.ChunkingStrategy.Parameters {
+			newConfig.ChunkingStrategy.Parameters[k] = v
+		}
+
+		// 深拷贝切片
+		copy(newConfig.ChunkingStrategy.IncludeTypes, config.ChunkingStrategy.IncludeTypes)
+		copy(newConfig.ChunkingStrategy.ExcludeTypes, config.ChunkingStrategy.ExcludeTypes)
+	}
+
 	// 检查是否需要修复或补充配置
 	var warnings []string
 	var notes []string
 	migrated := false
 
 	// 确保有策略配置
-	if config.ChunkingStrategy == nil {
-		config.ChunkingStrategy = ElementLevelConfig()
+	if newConfig.ChunkingStrategy == nil {
+		newConfig.ChunkingStrategy = ElementLevelConfig()
 		migrated = true
 		warnings = append(warnings, "缺少策略配置，添加了默认的元素级策略")
 		notes = append(notes, "为了保持向后兼容性，使用元素级策略作为默认策略")
 	}
 
 	// 验证并修复策略配置
-	EnsureDefaultStrategyConfig(config)
+	EnsureDefaultStrategyConfig(newConfig)
 
 	// 验证配置
-	if err := ValidateConfig(config); err != nil {
+	if err := ValidateConfig(newConfig); err != nil {
 		return nil, NewChunkerError(ErrorTypeConfigInvalid, "配置验证失败", err).
 			WithContext("function", "migrateV2Config")
 	}
 
 	return &ConfigMigrationResult{
-		Config:          config,
+		Config:          newConfig,
 		Migrated:        migrated,
 		OriginalVersion: ConfigVersionV2,
 		TargetVersion:   ConfigVersionV2,
